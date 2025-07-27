@@ -21,15 +21,16 @@ class List(models.Model):
     background = models.TextField(blank=True)
     visibility = models.CharField(max_length=20, default='private')
     created_at = models.DateTimeField(auto_now_add=True)
-    boardid = models.ForeignKey(Board, on_delete=models.CASCADE)
+    board = models.ForeignKey(Board, on_delete=models.CASCADE)  # ✅ rename từ boardid → board
 
 class Card(models.Model):
     name = models.CharField(max_length=255)
     background = models.TextField(blank=True)
     visibility = models.CharField(max_length=20, default='private')
-    listid = models.ForeignKey(List, on_delete=models.CASCADE)
+    list = models.ForeignKey(List, on_delete=models.CASCADE)  # ✅ rename từ listid → list
     STATUS_CHOICES = [
         ('doing', 'Doing'),
         ('done', 'Done'),
     ]
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='doing')
+
