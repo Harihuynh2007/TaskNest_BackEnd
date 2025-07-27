@@ -1,13 +1,21 @@
 from django.urls import path
-from .views import BoardListCreateView
-from .views import WorkspaceListCreateView
-from .views import ListsCreateView
-from .views import CardListCreateView
+from .views import (
+    WorkspaceListCreateView,
+    BoardListCreateView,
+    ListsCreateView,
+    CardListCreateView,
+    BoardDetailView
+)
 
 urlpatterns = [
-    path('workspaces/', WorkspaceListCreateView.as_view()),
-    path('workspaces/<int:workspace_id>/boards/', BoardListCreateView.as_view()),
-    path('workspaces/<int:workspace_id>/boards/lists', ListsCreateView.as_view()),
-    path('workspaces/<int:workspace_id>/boards/lists/cards', CardListCreateView.as_view()),
+    # Workspace
+    path('workspaces/', WorkspaceListCreateView.as_view(), name='workspace-list-create'),
+    path('workspaces/<int:workspace_id>/boards/', BoardListCreateView.as_view(), name='board-list-create'),
 
+    # List (theo board)
+    path('boards/<int:board_id>/lists/', ListsCreateView.as_view(), name='list-list-create'),
+
+    # Card (theo list)
+    path('lists/<int:list_id>/cards/', CardListCreateView.as_view(), name='card-list-create'),
+    path('workspaces/<int:workspace_id>/boards/<int:board_id>/', BoardDetailView.as_view(), name='board-detail'),
 ]

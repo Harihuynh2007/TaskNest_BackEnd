@@ -49,18 +49,18 @@ class WorkspaceListCreateView(APIView):
 class ListsCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, workspace_id):
-        board_id = request.query_params.get('board_id')
+    def get(self, request, board_id):
         try:
             board = Board.objects.get(id=board_id)
         except Board.DoesNotExist:
             return Response({'error': 'Board not found'}, status=404)
+
         lists = List.objects.filter(board=board)
         serializer = ListSerializer(lists, many=True)
         return Response(serializer.data)
 
-    def post(self, request, workspace_id):
-        board_id = request.data.get('board')
+    def post(self, request, board_id):
+        print("📥 Payload:", request.data)  # Debug nếu cần
         try:
             board = Board.objects.get(id=board_id)
         except Board.DoesNotExist:
@@ -68,25 +68,26 @@ class ListsCreateView(APIView):
 
         serializer = ListSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save(board=board)
+            serializer.save(board=board)  # 👈 Gắn đúng foreign key
             return Response(serializer.data, status=201)
+
         return Response(serializer.errors, status=400)
+
 
 class CardListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, workspace_id):
-        list_id = request.query_params.get('list_id')
+    def get(self, request, list_id): 
         try:
             list_obj = List.objects.get(id=list_id)
         except List.DoesNotExist:
             return Response({'error': 'List not found'}, status=404)
+
         cards = Card.objects.filter(list=list_obj)
         serializer = CardSerializer(cards, many=True)
         return Response(serializer.data)
 
-    def post(self, request, workspace_id):
-        list_id = request.data.get('list')
+    def post(self, request, list_id):  
         try:
             list_obj = List.objects.get(id=list_id)
         except List.DoesNotExist:
@@ -96,4 +97,18 @@ class CardListCreateView(APIView):
         if serializer.is_valid():
             serializer.save(list=list_obj)
             return Response(serializer.data, status=201)
+        
+        print("❌ Validation errors:", serializer.errors)
         return Response(serializer.errors, status=400)
+
+class BoardDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, workspace_id, board_id):
+        try:
+            board = Board.objects.get(id=board_id, workspace_id=workspace_id)
+        except Board.DoesNotExist:
+            return Response({'error': 'Board not found'}, status=404)
+
+        serializer = BoardSerializer(board)
+        return Response(serializer.data)
