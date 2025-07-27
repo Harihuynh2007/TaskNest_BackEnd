@@ -18,9 +18,9 @@ class WorkspaceSerializer(serializers.ModelSerializer):
 class ListSerializer(serializers.ModelSerializer):
     class Meta:
         model = List
-        fields = ['id', 'name', 'background', 'board_id', 'visibility']
+        fields = ['id', 'name', 'background', 'board', 'visibility']
 
 class CardSerializer(serializers.ModelSerializer):
     class Meta:
         model = Card
-        fields = ['id', 'name', 'status', 'background', 'list_id']
+        fields = ['id', 'name', 'status', 'background', 'list']
