@@ -18,6 +18,7 @@ class Board(models.Model):
 
 class List(models.Model):
     name = models.CharField(max_length=128)
+    position = models.IntegerField(default=0)
     background = models.TextField(blank=True)
     visibility = models.CharField(max_length=20, default='private')
     created_at = models.DateTimeField(auto_now_add=True)

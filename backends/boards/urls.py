@@ -5,7 +5,8 @@ from .views import (
     ListsCreateView,
     CardListCreateView,
     BoardDetailView,
-    CardDetailView
+    CardDetailView,
+    ListDetailView
 )
 
 urlpatterns = [
@@ -21,4 +22,6 @@ urlpatterns = [
     path('workspaces/<int:workspace_id>/boards/<int:board_id>/', BoardDetailView.as_view(), name='board-detail'),
 
     path('cards/<int:card_id>/', CardDetailView.as_view(), name='card-detail'),
+    path('lists/<int:list_id>/', ListDetailView.as_view(), name='list-detail'),
+
 ]

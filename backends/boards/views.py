@@ -55,7 +55,7 @@ class ListsCreateView(APIView):
         except Board.DoesNotExist:
             return Response({'error': 'Board not found'}, status=404)
 
-        lists = List.objects.filter(board=board)
+        lists = List.objects.filter(board=board).order_by('position')
         serializer = ListSerializer(lists, many=True)
         return Response(serializer.data)
 
@@ -123,6 +123,22 @@ class CardDetailView(APIView):
             return Response({'error': 'Card not found'}, status=404)
 
         serializer = CardSerializer(card, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=400)
+
+class ListDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, list_id):
+        try:
+            list_obj = List.objects.get(id=list_id)
+            
+        except List.DoesNotExist:
+            return Response({'error': 'List not found'}, status=404)
+
+        serializer = ListSerializer(list_obj, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
