@@ -112,3 +112,18 @@ class BoardDetailView(APIView):
 
         serializer = BoardSerializer(board)
         return Response(serializer.data)
+
+class CardDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, card_id):
+        try:
+            card = Card.objects.get(id=card_id)
+        except Card.DoesNotExist:
+            return Response({'error': 'Card not found'}, status=404)
+
+        serializer = CardSerializer(card, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=400)

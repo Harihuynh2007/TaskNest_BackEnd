@@ -4,7 +4,8 @@ from .views import (
     BoardListCreateView,
     ListsCreateView,
     CardListCreateView,
-    BoardDetailView
+    BoardDetailView,
+    CardDetailView
 )
 
 urlpatterns = [
@@ -18,4 +19,6 @@ urlpatterns = [
     # Card (theo list)
     path('lists/<int:list_id>/cards/', CardListCreateView.as_view(), name='card-list-create'),
     path('workspaces/<int:workspace_id>/boards/<int:board_id>/', BoardDetailView.as_view(), name='board-detail'),
+
+    path('cards/<int:card_id>/', CardDetailView.as_view(), name='card-detail'),
 ]
