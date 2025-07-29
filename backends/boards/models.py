@@ -28,6 +28,9 @@ class Card(models.Model):
     name = models.CharField(max_length=255)
     background = models.TextField(blank=True)
     visibility = models.CharField(max_length=20, default='private')
+    description = models.TextField(blank=True)
+    due_date = models.DateTimeField(null=True, blank=True)
+    completed = models.BooleanField(default=False)
     list = models.ForeignKey(List, on_delete=models.CASCADE, null=True, blank=True)  # ✅ rename từ listid → list
     STATUS_CHOICES = [
         ('doing', 'Doing'),
