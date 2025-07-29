@@ -6,7 +6,8 @@ from .views import (
     CardListCreateView,
     BoardDetailView,
     CardDetailView,
-    ListDetailView
+    ListDetailView,
+    InboxCardCreateView
 )
 
 urlpatterns = [
@@ -20,8 +21,10 @@ urlpatterns = [
     # Card (theo list)
     path('lists/<int:list_id>/cards/', CardListCreateView.as_view(), name='card-list-create'),
     path('workspaces/<int:workspace_id>/boards/<int:board_id>/', BoardDetailView.as_view(), name='board-detail'),
-
+    # Card va List thay doi vi tri khi f5 va save card list
     path('cards/<int:card_id>/', CardDetailView.as_view(), name='card-detail'),
     path('lists/<int:list_id>/', ListDetailView.as_view(), name='list-detail'),
+
+    path('cards/', InboxCardCreateView.as_view(), name='card-create-inbox'),
 
 ]
