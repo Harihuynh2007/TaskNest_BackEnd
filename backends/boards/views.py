@@ -83,7 +83,7 @@ class CardListCreateView(APIView):
         except List.DoesNotExist:
             return Response({'error': 'List not found'}, status=404)
 
-        cards = Card.objects.filter(list=list_obj)
+        cards = Card.objects.filter(list=list_obj).order_by('position')
         serializer = CardSerializer(cards, many=True)
         return Response(serializer.data)
 
