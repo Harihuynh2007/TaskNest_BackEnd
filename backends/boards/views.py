@@ -101,6 +101,17 @@ class CardListCreateView(APIView):
         print("❌ Validation errors:", serializer.errors)
         return Response(serializer.errors, status=400)
 
+class InboxCardCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = CardSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=201)
+        return Response(serializer.errors, status=400)
+
+
 class BoardDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
