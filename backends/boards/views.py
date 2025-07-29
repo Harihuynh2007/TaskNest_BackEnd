@@ -103,11 +103,16 @@ class CardListCreateView(APIView):
 
 class InboxCardCreateView(APIView):
     permission_classes = [IsAuthenticated]
-
+    
+    def get(self, request):
+        cards = Card.objects.filter(list__isnull=True, created_by=request.user).order_by('position')
+        serializer = CardSerializer(cards, many=True)
+        return Response(serializer.data)
+    
     def post(self, request):
         serializer = CardSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            serializer.save(created_by=request.user)
             return Response(serializer.data, status=201)
         return Response(serializer.errors, status=400)
 
@@ -133,10 +138,14 @@ class CardDetailView(APIView):
         except Card.DoesNotExist:
             return Response({'error': 'Card not found'}, status=404)
 
+        print("🛠 PATCH data:", request.data)
+
         serializer = CardSerializer(card, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
+        
+        print("❌ Validation error:", serializer.errors)
         return Response(serializer.errors, status=400)
 
 class ListDetailView(APIView):
