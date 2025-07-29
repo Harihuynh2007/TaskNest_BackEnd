@@ -24,4 +24,7 @@ class CardSerializer(serializers.ModelSerializer):
     class Meta:
         model = Card
         fields = ['id', 'name', 'status', 'background', 'list']
+        extra_kwargs = {
+            'list': {'required': False}
+        }
         
