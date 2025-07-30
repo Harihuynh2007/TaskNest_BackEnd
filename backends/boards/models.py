@@ -37,5 +37,6 @@ class Card(models.Model):
         ('done', 'Done'),
     ]
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='doing')
+    created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(User, on_delete=models.CASCADE, null=True)
     position = models.IntegerField(default=0)
