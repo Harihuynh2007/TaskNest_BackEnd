@@ -7,7 +7,9 @@ from .views import (
     BoardDetailView,
     CardDetailView,
     ListDetailView,
-    InboxCardCreateView
+    InboxCardCreateView,
+    BoardLabelsView,
+    BoardMembersView
 )
 
 urlpatterns = [
@@ -26,5 +28,9 @@ urlpatterns = [
     path('lists/<int:list_id>/', ListDetailView.as_view(), name='list-detail'),
 
     path('cards/', InboxCardCreateView.as_view(), name='card-create-inbox'),
+
+    path('boards/<int:board_id>/labels/', BoardLabelsView.as_view()),
+
+    path('boards/<int:board_id>/members/', BoardMembersView.as_view()),
 
 ]

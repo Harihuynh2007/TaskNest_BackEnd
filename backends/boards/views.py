@@ -2,9 +2,11 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from .models import Board, Workspace, List, Card
+from .models import Board, Workspace, List, Card, Label
 from .serializers import BoardSerializer
-from .serializers import WorkspaceSerializer, ListSerializer, CardSerializer
+from .serializers import WorkspaceSerializer, ListSerializer, CardSerializer,LabelSerializer
+from boards.serializers import UserShortSerializer
+
 
 class BoardListCreateView(APIView):
     permission_classes = [IsAuthenticated]
@@ -163,3 +165,19 @@ class ListDetailView(APIView):
             serializer.save()
             return Response(serializer.data)
         return Response(serializer.errors, status=400)
+
+class BoardMembersView(APIView):
+    def get(self, request, board_id):
+        try:
+            board = Board.objects.get(id=board_id)
+            members = board.members.all()
+            serializer = UserShortSerializer(members, many=True)
+            return Response(serializer.data)
+        except Board.DoesNotExist:
+            return Response({'error': 'Board not found'}, status=404)
+        
+class BoardLabelsView(APIView):
+    def get(self, request, board_id):
+        labels = Label.objects.filter(board_id=board_id)
+        serializer = LabelSerializer(labels, many=True)
+        return Response(serializer.data)

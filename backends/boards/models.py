@@ -2,6 +2,7 @@
 from django.db import models
 from django.contrib.auth import get_user_model
 
+
 User = get_user_model()
 
 class Workspace(models.Model):
@@ -40,3 +41,10 @@ class Card(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(User, on_delete=models.CASCADE, null=True)
     position = models.IntegerField(default=0)
+    labels = models.ManyToManyField("Label", blank=True, related_name='cards')
+
+
+class Label(models.Model):
+    name = models.CharField(max_length=100)
+    color = models.CharField(max_length=20)
+    board = models.ForeignKey(Board, on_delete=models.CASCADE, related_name='labels')
