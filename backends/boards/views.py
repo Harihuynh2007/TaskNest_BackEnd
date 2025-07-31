@@ -7,10 +7,11 @@ from .serializers import BoardSerializer
 from .serializers import WorkspaceSerializer, ListSerializer, CardSerializer,LabelSerializer
 from boards.serializers import UserShortSerializer
 from rest_framework import status
-
+from django.contrib.auth import get_user_model
 # Tạm tắt WebSocket để tránh lỗi Redis
 # channel_layer = get_channel_layer()
 
+User = get_user_model()
 
 class BoardListCreateView(APIView):
     permission_classes = [IsAuthenticated]
@@ -186,6 +187,8 @@ class ListDetailView(APIView):
         return Response(serializer.errors, status=400)
 
 class BoardMembersView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, board_id):
         try:
             board = Board.objects.get(id=board_id)
@@ -195,6 +198,30 @@ class BoardMembersView(APIView):
         except Board.DoesNotExist:
             return Response({'error': 'Board not found'}, status=404)
         
+    def post(self, request, board_id):
+        try:
+            board = Board.objects.get(id=board_id)
+        except Board.DoesNotExist:
+            return Response({'error': 'Board not found'}, status=404)
+
+        # ✅ Chỉ người tạo mới được mời
+        if request.user != board.created_by:
+            return Response({'error': 'Only board creator can invite members'}, status=403)
+        
+        user_id = request.data.get('user_id')
+        if not user_id:
+            return Response({'error': 'user_id is required'}, status=400)
+
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response({'error': 'User not found'}, status=404)
+
+        if user in board.members.all():
+            return Response({'message': 'User already in board'}, status=200)
+
+        board.members.add(user)
+        return Response({'message': 'User added successfully'}, status=200)
 class BoardLabelsView(APIView):
     def get(self, request, board_id):
         labels = Label.objects.filter(board_id=board_id)
@@ -264,13 +291,15 @@ class CardBatchUpdateView(APIView):
                     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
             # Gửi thông báo WebSocket
-            channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                f'board_{board_id}',
-                {'type': 'card_update'}
-            )
+            #channel_layer = get_channel_layer()
+            #async_to_sync(channel_layer.group_send)(
+            #    f'board_{board_id}',
+            #    {'type': 'card_update'}
+            #)
             return Response({"message": "Cards updated successfully"}, status=status.HTTP_200_OK)
         except Card.DoesNotExist:
             return Response({"error": "One or more cards not found"}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+
