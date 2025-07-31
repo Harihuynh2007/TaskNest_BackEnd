@@ -13,7 +13,6 @@ from .views import (
     LabelCreateView,
     LabelDetailView,
     CardBatchUpdateView,
-    add_member_to_board
 )
 
 urlpatterns = [
@@ -42,5 +41,5 @@ urlpatterns = [
 
     path('cards/batch-update/', CardBatchUpdateView.as_view(), name='card-batch-update'),
 
-    path('boards/<int:board_id>/add-member/', add_member_to_board, name='board-add-member'),
+    
 ]

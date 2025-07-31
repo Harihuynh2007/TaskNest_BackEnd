@@ -8,6 +8,9 @@ from .serializers import WorkspaceSerializer, ListSerializer, CardSerializer,Lab
 from boards.serializers import UserShortSerializer
 from rest_framework import status
 from django.contrib.auth import get_user_model
+from .models import BoardMembership
+from .serializers import BoardMembershipSerializer
+
 # Tạm tắt WebSocket để tránh lỗi Redis
 # channel_layer = get_channel_layer()
 
@@ -303,3 +306,43 @@ class CardBatchUpdateView(APIView):
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
 
+
+class BoardMembersView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, board_id):
+        memberships = BoardMembership.objects.filter(board_id=board_id)
+        serializer = BoardMembershipSerializer(memberships, many=True)
+        return Response(serializer.data)
+
+    def post(self, request, board_id):
+        try:
+            board = Board.objects.get(id=board_id)
+        except Board.DoesNotExist:
+            return Response({'error': 'Board not found'}, status=404)
+
+        if request.user != board.created_by:
+            return Response({'error': 'Only creator can invite'}, status=403)
+
+        user_id = request.data.get('user_id')
+        if BoardMembership.objects.filter(board=board, user_id=user_id).exists():
+            return Response({'message': 'User already in board'}, status=200)
+
+        BoardMembership.objects.create(board=board, user_id=user_id, role='member')
+        return Response({'message': 'User added'}, status=201)
+
+    def patch(self, request, board_id):
+        user_id = request.data.get('user_id')
+        new_role = request.data.get('role')
+
+        try:
+            membership = BoardMembership.objects.get(board_id=board_id, user_id=user_id)
+        except BoardMembership.DoesNotExist:
+            return Response({'error': 'Membership not found'}, status=404)
+
+        if request.user != membership.board.created_by:
+            return Response({'error': 'Only creator can change roles'}, status=403)
+
+        membership.role = new_role
+        membership.save()
+        return Response({'message': 'Role updated'}, status=200)

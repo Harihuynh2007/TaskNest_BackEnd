@@ -49,3 +49,16 @@ class Label(models.Model):
     name = models.CharField(max_length=100)
     color = models.CharField(max_length=20)
     board = models.ForeignKey(Board, on_delete=models.CASCADE, related_name='labels')
+
+class BoardMembership(models.Model):
+    board = models.ForeignKey(Board, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    role = models.CharField(
+        max_length=10,
+        choices=[('admin', 'Admin'), ('member', 'Member')],
+        default='member'
+    )
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('board', 'user')

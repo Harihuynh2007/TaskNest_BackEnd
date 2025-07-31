@@ -5,6 +5,7 @@ from .models import Workspace
 from .models import List
 from .models import Card
 from .models import Label
+from .models import BoardMembership
 class BoardSerializer(serializers.ModelSerializer):
     class Meta:
         model = Board
@@ -44,3 +45,10 @@ class UserShortSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['id', 'username', 'first_name', 'last_name', 'email']
+
+class BoardMembershipSerializer(serializers.ModelSerializer):
+    user = UserShortSerializer(read_only=True)
+
+    class Meta:
+        model = BoardMembership
+        fields = ['id', 'user', 'role', 'joined_at']
