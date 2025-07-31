@@ -29,7 +29,15 @@ class BoardListCreateView(APIView):
 
         serializer = BoardSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save(workspace=workspace, created_by=request.user)
+            board = serializer.save(workspace=workspace, created_by=request.user)
+
+            DEFAULT_LABEL_COLORS = [
+                '#61bd4f', '#f2d600', '#ff9f1a', '#eb5a46', '#c377e0',
+                '#0079bf', '#00c2e0', '#51e898', '#ff78cb', '#344563',
+            ]
+            for color in DEFAULT_LABEL_COLORS:
+                Label.objects.create(name='', color=color, board=board)
+
             return Response(serializer.data, status=201)
         return Response(serializer.errors, status=400)
 
@@ -181,3 +189,42 @@ class BoardLabelsView(APIView):
         labels = Label.objects.filter(board_id=board_id)
         serializer = LabelSerializer(labels, many=True)
         return Response(serializer.data)
+
+class LabelCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, board_id):
+        try:
+            board = Board.objects.get(id=board_id)
+        except Board.DoesNotExist:
+            return Response({"error": "Board not found"}, status=404)
+
+        serializer = LabelSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(board=board)
+            return Response(serializer.data, status=201)
+        return Response(serializer.errors, status=400)
+
+
+class LabelDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, label_id):
+        try:
+            label = Label.objects.get(id=label_id)
+        except Label.DoesNotExist:
+            return Response({"error": "Label not found"}, status=404)
+
+        serializer = LabelSerializer(label, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=400)
+
+    def delete(self, request, label_id):
+        try:
+            label = Label.objects.get(id=label_id)
+            label.delete()
+            return Response(status=204)
+        except Label.DoesNotExist:
+            return Response({"error": "Label not found"}, status=404)
