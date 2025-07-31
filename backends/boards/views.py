@@ -6,8 +6,9 @@ from .models import Board, Workspace, List, Card, Label
 from .serializers import BoardSerializer
 from .serializers import WorkspaceSerializer, ListSerializer, CardSerializer,LabelSerializer
 from boards.serializers import UserShortSerializer
-
-
+from rest_framework import status
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
 class BoardListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -153,7 +154,14 @@ class CardDetailView(APIView):
         serializer = CardSerializer(card, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data)
+
+            channel_layer = get_channel_layer()
+            board_id = card.list.board_id if card.list else card.created_by.board_set.first().id
+            async_to_sync(channel_layer.group_send)(
+                f'board_{board_id}',
+                {'type': 'card_update'}
+            )
+            return Response(serializer.data) 
         
         print("❌ Validation error:", serializer.errors)
         return Response(serializer.errors, status=400)
@@ -228,3 +236,38 @@ class LabelDetailView(APIView):
             return Response(status=204)
         except Label.DoesNotExist:
             return Response({"error": "Label not found"}, status=404)
+
+
+
+class CardBatchUpdateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request):
+        updates = request.data
+        if not isinstance(updates, list):
+            return Response({"error": "Request body must be a list of updates"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            board_id = None
+            for update in updates:
+                card_id = update.get("id")
+                card = Card.objects.get(id=card_id, created_by=request.user)
+                serializer = CardSerializer(card, data=update, partial=True)
+                if serializer.is_valid():
+                    serializer.save()
+                    if not board_id:
+                        board_id = card.list.board_id if card.list else card.created_by.board_set.first().id
+                else:
+                    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+            # Gửi thông báo WebSocket
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                f'board_{board_id}',
+                {'type': 'card_update'}
+            )
+            return Response({"message": "Cards updated successfully"}, status=status.HTTP_200_OK)
+        except Card.DoesNotExist:
+            return Response({"error": "One or more cards not found"}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

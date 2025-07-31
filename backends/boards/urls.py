@@ -11,7 +11,8 @@ from .views import (
     BoardLabelsView,
     BoardMembersView,
     LabelCreateView,
-    LabelDetailView
+    LabelDetailView,
+    CardBatchUpdateView
 )
 
 urlpatterns = [
@@ -37,4 +38,6 @@ urlpatterns = [
 
     path('boards/<int:board_id>/labels/', LabelCreateView.as_view(), name='label-create'),
     path('labels/<int:label_id>/', LabelDetailView.as_view(), name='label-detail'),
+
+    path('cards/batch-update/', CardBatchUpdateView.as_view(), name='card-batch-update')
 ]

@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'auth_app',
     'boards',
+    'channels',
     
 ]
 
@@ -150,4 +151,15 @@ SIMPLE_JWT = {
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
+}
+
+ASGI_APPLICATION = 'config.socket.asgi.application'
+
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            'hosts': [('127.0.0.1', 6379)],
+        },
+    },
 }
