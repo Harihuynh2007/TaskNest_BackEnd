@@ -7,8 +7,11 @@ from .serializers import BoardSerializer
 from .serializers import WorkspaceSerializer, ListSerializer, CardSerializer,LabelSerializer
 from boards.serializers import UserShortSerializer
 from rest_framework import status
-from channels.layers import get_channel_layer
-from asgiref.sync import async_to_sync
+
+# Tạm tắt WebSocket để tránh lỗi Redis
+# channel_layer = get_channel_layer()
+
+
 class BoardListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -155,12 +158,12 @@ class CardDetailView(APIView):
         if serializer.is_valid():
             serializer.save()
 
-            channel_layer = get_channel_layer()
-            board_id = card.list.board_id if card.list else card.created_by.board_set.first().id
-            async_to_sync(channel_layer.group_send)(
-                f'board_{board_id}',
-                {'type': 'card_update'}
-            )
+            #channel_layer = get_channel_layer()
+            #board_id = card.list.board_id if card.list else card.created_by.board_set.first().id
+            #async_to_sync(channel_layer.group_send)(
+            #    f'board_{board_id}',
+            #    {'type': 'card_update'}
+            #)
             return Response(serializer.data) 
         
         print("❌ Validation error:", serializer.errors)
