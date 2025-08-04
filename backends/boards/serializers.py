@@ -44,7 +44,7 @@ User = get_user_model()
 class UserShortSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'username', 'first_name', 'last_name', 'email']
+        fields = ['id', 'username', 'email']
 
 class BoardMembershipSerializer(serializers.ModelSerializer):
     user = UserShortSerializer(read_only=True)

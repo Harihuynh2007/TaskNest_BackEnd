@@ -34,7 +34,7 @@ urlpatterns = [
 
     path('boards/<int:board_id>/labels/', BoardLabelsView.as_view()),
 
-    path('boards/<int:board_id>/members/', BoardMembersView.as_view()),
+    path('boards/<int:board_id>/members/', BoardMembersView.as_view(), name='board_members'),
 
     path('boards/<int:board_id>/labels/', LabelCreateView.as_view(), name='label-create'),
     path('labels/<int:label_id>/', LabelDetailView.as_view(), name='label-detail'),

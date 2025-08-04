@@ -10,7 +10,7 @@ from rest_framework import status
 from django.contrib.auth import get_user_model
 from .models import BoardMembership
 from .serializers import BoardMembershipSerializer
-
+from .decorators import require_board_editor, require_board_viewer,require_card_editor
 # Tạm tắt WebSocket để tránh lỗi Redis
 # channel_layer = get_channel_layer()
 
@@ -66,7 +66,7 @@ class WorkspaceListCreateView(APIView):
     
 class ListsCreateView(APIView):
     permission_classes = [IsAuthenticated]
-
+    @require_board_viewer(lambda self, request, board_id: Board.objects.get(id=board_id))
     def get(self, request, board_id):
         try:
             board = Board.objects.get(id=board_id)
@@ -77,6 +77,7 @@ class ListsCreateView(APIView):
         serializer = ListSerializer(lists, many=True)
         return Response(serializer.data)
 
+    @require_board_editor(lambda self, request, board_id: Board.objects.get(id=board_id))   
     def post(self, request, board_id):
         print("📥 Payload:", request.data)  # Debug nếu cần
         try:
@@ -94,7 +95,7 @@ class ListsCreateView(APIView):
 
 class CardListCreateView(APIView):
     permission_classes = [IsAuthenticated]
-
+    @require_board_viewer(lambda self, request, list_id: List.objects.get(id=list_id).board)
     def get(self, request, list_id): 
         try:
             list_obj = List.objects.get(id=list_id)
@@ -105,6 +106,7 @@ class CardListCreateView(APIView):
         serializer = CardSerializer(cards, many=True)
         return Response(serializer.data)
 
+    @require_board_editor(lambda self, request, list_id: List.objects.get(id=list_id).board)
     def post(self, request, list_id):  
         try:
             list_obj = List.objects.get(id=list_id)
@@ -138,6 +140,7 @@ class InboxCardCreateView(APIView):
 class BoardDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @require_board_viewer(lambda self, request, workspace_id, board_id: Board.objects.get(id=board_id, workspace_id=workspace_id))
     def get(self, request, workspace_id, board_id):
         try:
             board = Board.objects.get(id=board_id, workspace_id=workspace_id)
@@ -149,7 +152,7 @@ class BoardDetailView(APIView):
 
 class CardDetailView(APIView):
     permission_classes = [IsAuthenticated]
-
+    @require_card_editor(lambda self, request, card_id: Card.objects.get(id=card_id))
     def patch(self, request, card_id):
         try:
             card = Card.objects.get(id=card_id)
@@ -175,7 +178,7 @@ class CardDetailView(APIView):
 
 class ListDetailView(APIView):
     permission_classes = [IsAuthenticated]
-
+    @require_board_editor(lambda self, request, list_id: List.objects.get(id=list_id).board)
     def patch(self, request, list_id):
         try:
             list_obj = List.objects.get(id=list_id)
@@ -192,6 +195,7 @@ class ListDetailView(APIView):
 class BoardMembersView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @require_board_viewer(lambda self, request, board_id: Board.objects.get(id=board_id))
     def get(self, request, board_id):
         try:
             board = Board.objects.get(id=board_id)
@@ -226,6 +230,7 @@ class BoardMembersView(APIView):
         board.members.add(user)
         return Response({'message': 'User added successfully'}, status=200)
 class BoardLabelsView(APIView):
+    @require_board_viewer(lambda self, request, board_id: Board.objects.get(id=board_id))
     def get(self, request, board_id):
         labels = Label.objects.filter(board_id=board_id)
         serializer = LabelSerializer(labels, many=True)
@@ -233,7 +238,7 @@ class BoardLabelsView(APIView):
 
 class LabelCreateView(APIView):
     permission_classes = [IsAuthenticated]
-
+    @require_board_editor(lambda self, request, board_id: Board.objects.get(id=board_id))
     def post(self, request, board_id):
         try:
             board = Board.objects.get(id=board_id)
@@ -250,6 +255,7 @@ class LabelCreateView(APIView):
 class LabelDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @require_board_editor(lambda self, request, label_id: Label.objects.get(id=label_id).board)
     def patch(self, request, label_id):
         try:
             label = Label.objects.get(id=label_id)
@@ -262,6 +268,7 @@ class LabelDetailView(APIView):
             return Response(serializer.data)
         return Response(serializer.errors, status=400)
 
+    @require_board_editor(lambda self, request, label_id: Label.objects.get(id=label_id).board)
     def delete(self, request, label_id):
         try:
             label = Label.objects.get(id=label_id)
@@ -275,6 +282,7 @@ class LabelDetailView(APIView):
 class CardBatchUpdateView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @require_board_editor(lambda self, request: Board.objects.get(id=request.data[0]['board_id']))
     def patch(self, request):
         updates = request.data
         if not isinstance(updates, list):
@@ -310,12 +318,17 @@ class CardBatchUpdateView(APIView):
 class BoardMembersView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, board_id):
+    def get(self, request, board_id):   # Get members list of a board
+        try:
+            board = Board.objects.get(id=board_id)
+        except Board.DoesNotExist:
+            return Response({'error': 'Board not found'}, status=404)
+
         memberships = BoardMembership.objects.filter(board_id=board_id)
         serializer = BoardMembershipSerializer(memberships, many=True)
         return Response(serializer.data)
 
-    def post(self, request, board_id):
+    def post(self, request, board_id):  # Invite member
         try:
             board = Board.objects.get(id=board_id)
         except Board.DoesNotExist:
@@ -328,12 +341,14 @@ class BoardMembersView(APIView):
         if BoardMembership.objects.filter(board=board, user_id=user_id).exists():
             return Response({'message': 'User already in board'}, status=200)
 
-        BoardMembership.objects.create(board=board, user_id=user_id, role='member')
+        BoardMembership.objects.create(board=board, user_id=user_id, role='viewer')
         return Response({'message': 'User added'}, status=201)
 
-    def patch(self, request, board_id):
+    def patch(self, request, board_id):  # Update member role
         user_id = request.data.get('user_id')
         new_role = request.data.get('role')
+        if new_role not in ['viewer', 'editor']:
+            return Response({'error': 'Invalid role'}, status=400)
 
         try:
             membership = BoardMembership.objects.get(board_id=board_id, user_id=user_id)

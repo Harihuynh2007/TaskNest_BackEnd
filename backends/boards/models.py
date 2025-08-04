@@ -1,7 +1,7 @@
 # boards/models.py
 from django.db import models
 from django.contrib.auth import get_user_model
-
+from django.conf import settings
 
 User = get_user_model()
 
@@ -61,8 +61,8 @@ class BoardMembership(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     role = models.CharField(
         max_length=10,
-        choices=[('admin', 'Admin'), ('member', 'Member')],
-        default='member'
+        choices=[('editor', 'Editor'), ('viewer', 'Viewer')],
+        default='viewer'
     )
     joined_at = models.DateTimeField(auto_now_add=True)
 
