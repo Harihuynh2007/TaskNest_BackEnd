@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     'auth_app',
     'boards',
     'channels',
+    'rest_framework_simplejwt.token_blacklist',
     
 ]
 

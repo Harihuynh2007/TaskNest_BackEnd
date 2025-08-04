@@ -30,6 +30,10 @@ class RegisterView(APIView):
             return Response({"error": "Email already registered"}, status=400)
 
         user = User.objects.create_user(username=email, email=email, password=password)
+        
+        if not Workspace.objects.filter(owner=user).exists():
+            Workspace.objects.create(name="Hard Spirit", owner=user)
+            
         tokens = get_tokens_for_user(user)
         return Response({
             "ok": True,

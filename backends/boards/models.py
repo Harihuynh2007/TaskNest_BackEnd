@@ -8,7 +8,7 @@ User = get_user_model()
 class Workspace(models.Model):
     name = models.CharField(max_length=255)
     owner = models.ForeignKey(User, on_delete=models.CASCADE)
-
+    
 class Board(models.Model):
     name = models.CharField(max_length=255)
     background = models.TextField(blank=True)
@@ -16,7 +16,13 @@ class Board(models.Model):
     workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    members = models.ManyToManyField(User, related_name='boards', blank=True)
+    members = models.ManyToManyField(
+    User,
+    related_name='boards',
+    through='BoardMembership',
+    blank=True
+)
+
 
 class List(models.Model):
     name = models.CharField(max_length=128)
@@ -62,3 +68,4 @@ class BoardMembership(models.Model):
 
     class Meta:
         unique_together = ('board', 'user')
+
