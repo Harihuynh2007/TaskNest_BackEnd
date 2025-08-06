@@ -3,6 +3,7 @@ from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.shortcuts import get_object_or_404
 from rest_framework.exceptions import PermissionDenied
+from django.db import models
 
 from .models import Workspace, Board, List, Card, Label, BoardMembership
 from .serializers import (
@@ -10,7 +11,7 @@ from .serializers import (
     LabelSerializer, BoardMembershipSerializer
 )
 from .permissions import IsBoardOwner, IsBoardEditor, IsBoardMember, CanAccessBoardFromURL
-
+from rest_framework.views import APIView
 
 class WorkspaceViewSet(viewsets.ModelViewSet):
     serializer_class = WorkspaceSerializer
@@ -28,10 +29,22 @@ class BoardViewSet(viewsets.ModelViewSet):
 
 
     def get_queryset(self):
-        # Lọc các board thuộc workspace VÀ user có quyền xem (là owner hoặc member)
-        workspace_boards = Board.objects.filter(workspace_id=self.kwargs['workspace_pk'])
-        user_accessible_boards = Board.objects.filter(members=self.request.user) | Board.objects.filter(created_by=self.request.user)
-        return workspace_boards.intersection(user_accessible_boards).distinct()
+        """
+        Lấy các board thuộc về workspace được chỉ định trong URL
+        VÀ user hiện tại phải có quyền truy cập (là owner hoặc member).
+        """
+        # 1. Lấy tất cả các board mà user có quyền truy cập
+        user = self.request.user
+        user_accessible_boards = Board.objects.filter(
+            models.Q(created_by=user) | models.Q(members=user)
+        ).distinct()
+
+        workspace_pk = self.kwargs.get('workspace_pk')
+        if not workspace_pk:
+            # Trả về rỗng nếu không có workspace_pk để tránh lỗi
+            return Board.objects.none() 
+        
+        return user_accessible_boards.filter(workspace_id=workspace_pk)
 
     def get_permissions(self):
         if self.action in ['update', 'partial_update']:
@@ -191,3 +204,56 @@ class BoardMemberViewSet(viewsets.ModelViewSet):
         user_id_to_add = self.request.data.get('user_id') 
 
         serializer.save(board=board, user_id=user_id_to_add) # sửa serializer để nhận user_id
+
+
+class CardBatchUpdateView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def patch(self, request, *args, **kwargs):
+        updates = request.data
+        if not isinstance(updates, list):
+            return Response({'error': 'Expected a list of card updates.'}, status=400)
+        
+        updated_cards = []
+        for card_data in updates:
+            card_id = card_data.get('id')
+            if not card_id:
+                continue
+            
+            try:
+                card = Card.objects.get(pk=card_id)
+            except Card.DoesNotExist:
+                continue
+
+            # ✅ Chỉ cho phép sửa nếu user là editor của board
+            board = card.board or (card.list.board if card.list else None)
+            if not board or not IsBoardEditor().has_object_permission(request, self, board):
+                continue
+
+            serializer = CardSerializer(card, data=card_data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                updated_cards.append(serializer.data)
+
+        return Response(updated_cards, status=200)
+    
+class JoinBoardByLinkView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, token, *args, **kwargs):
+        try:
+            board = Board.objects.get(invite_token=token)
+        except Board.DoesNotExist:
+            return Response({"error": "Invalid or expired invite link."}, status=404)
+        
+        # Nếu user đã là thành viên → bỏ qua
+        if board.members.filter(pk=request.user.pk).exists():
+            return Response({"message": "You are already a member of this board."}, status=200)
+        
+        # Thêm vào board với vai trò mặc định
+        BoardMembership.objects.create(
+            board=board,
+            user=request.user,
+            role='member'
+        )
+        return Response({"message": "You have successfully joined the board."}, status=200)    
