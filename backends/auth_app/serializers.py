@@ -14,10 +14,12 @@ class UserSerializer(serializers.ModelSerializer):
     avatar = serializers.SerializerMethodField(read_only=True)
     role = serializers.SerializerMethodField(read_only=True)
 
+    # ✅ THÊM MỘT TRƯỜNG MỚI ĐỂ LÀM TÊN HIỂN THỊ
+    display_name = serializers.SerializerMethodField(read_only=True)
     class Meta:
         model = User
         # Các trường sẽ được trả về trong API response.
-        fields = ('id', 'username', 'email', 'avatar', 'role')
+        fields = ('id', 'username', 'email', 'avatar', 'role','display_name')
 
     def get_avatar(self, user):
         """
@@ -35,6 +37,19 @@ class UserSerializer(serializers.ModelSerializer):
         Xác định vai trò của người dùng.
         """
         return "admin" if user.is_superuser else "user"
+    
+    def get_display_name(self, user):
+        """
+        Trả về phần tên người dùng từ email.
+        Ví dụ: 'john.doe@example.com' -> 'john.doe'
+        Hoặc nếu có first_name, last_name thì trả về chúng.
+        """
+        # Nếu bạn có trường first_name và last_name, ưu tiên chúng
+        if user.first_name:
+            return user.first_name
+            
+        # Nếu không, trích xuất từ email
+        return user.email.split('@')[0]
 
 
 # ----------------- 2. Serializer cho chức năng ĐĂNG KÝ -----------------
