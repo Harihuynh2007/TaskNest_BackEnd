@@ -7,8 +7,15 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.tokens import RefreshToken
 import requests
 from boards.models import Workspace
-from .models import Profile
 from django.core.files.base import ContentFile
+import traceback
+
+from .serializers import (
+    RegisterSerializer,
+    LoginSerializer,
+    UserSerializer,
+    GoogleLoginSerializer
+)
 
 User = get_user_model()
 
@@ -22,91 +29,72 @@ def get_tokens_for_user(user):
 class RegisterView(APIView):
     permission_classes = [AllowAny]
 
-    def post(self, req):
-        email = req.data.get("email") or req.data.get("username")
-        password = req.data.get("password")
-        if not email or not password:
-            return Response({"error": "Missing credentials"}, status=400)
+    def post(self, request):
+        serializer = RegisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True) # Tự động trả về lỗi 400 nếu dữ liệu không hợp lệ
+        user = serializer.save() 
 
-        if User.objects.filter(email=email).exists():
-            return Response({"error": "Email already registered"}, status=400)
-
-        user = User.objects.create_user(username=email, email=email, password=password)
-        
-            
         tokens = get_tokens_for_user(user)
         return Response({
             "ok": True,
-            "email": user.email,
+            "user": UserSerializer(user).data, # Dùng UserSerializer để hiển thị thông tin
             "token": tokens["access"],
             "refresh": tokens["refresh"]
-        }, status=201)
+        }, status=status.HTTP_201_CREATED)
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
 
-    def post(self, req):
-        identifier = req.data.get("email") or req.data.get("username")
-        password = req.data.get("password")
+    def post(self, request):
+        serializer = LoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.validated_data['user'] # Lấy user đã được xác thực từ serializer
 
-        if not identifier or not password:
-            return Response({"error": "Missing credentials"}, status=400)
-
-        try:
-            user_obj = User.objects.get(email=identifier)
-            username = user_obj.username
-        except User.DoesNotExist:
-            username = identifier
-
-        user = authenticate(req, username=username, password=password)
-        if not user:
-            return Response({"error": "Bad credentials"}, status=401)
-
-        login(req, user)
+        login(request, user) # Cần cho Django Admin và các tính năng session-based khác
         tokens = get_tokens_for_user(user)
+
+        # Logic kiểm tra workspace cho user cũ có thể vẫn giữ lại nếu cần
+        if not Workspace.objects.filter(owner=user).exists():
+            Workspace.objects.create(name="Hard Spirit", owner=user)
 
         return Response({
             "ok": True,
-            "email": user.email,
+            "user": UserSerializer(user).data, 
             "token": tokens["access"],
             "refresh": tokens["refresh"]
         })
 
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
-    def post(self, req):
-        logout(req)
-        return Response({"ok": True})
+    authentication_classes = [JWTAuthentication] # Thêm dòng này để chắc chắn nó xác thực bằng JWT
+
+    def post(self, request):
+        logout(request)
+        return Response({"ok": True, "message": "Logged out successfully."})
 
 class MeView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        user = request.user
-        profile = getattr(user, 'profile', None)
-        avatar_url = None
-        if profile and profile.avatar:
-            avatar_url = request.build_absolute_uri(profile.avatar.url)
-        return Response({
-            "email": user.email or user.username,
-            "username": user.username,
-            "role": "admin" if user.is_superuser else "user",
-            "avatar": avatar_url,
-        })
+        # Chỉ cần truyền user và context có request vào UserSerializer
+        serializer = UserSerializer(request.user, context={'request': request})
+        return Response(serializer.data)
 
 class GoogleLoginView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        token = request.data.get('token')
-        if not token:
-            return Response({'error': 'No token'}, status=400)
+        # 1. Validate đầu vào
+        input_serializer = GoogleLoginSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+        token = input_serializer.validated_data['token']
 
         try:
             # 1. Xác minh với Google
             verify_url = f"https://www.googleapis.com/oauth2/v3/tokeninfo?id_token={token}"
             google_res = requests.get(verify_url)
+
             if google_res.status_code != 200:
                 print('[GoogleLogin] Invalid Google response:', google_res.text)
                 return Response({'error': 'Invalid token'}, status=400)
@@ -114,9 +102,6 @@ class GoogleLoginView(APIView):
             data = google_res.json()
             email = data.get('email')
             name = data.get('name')
-            picture = data.get('picture')
-
-            print('[GoogleLogin] Google email:', email)
 
             if not email:
                 return Response({'error': 'No email in token'}, status=400)
@@ -124,20 +109,15 @@ class GoogleLoginView(APIView):
             # 2. Lấy hoặc tạo user
             user, created = User.objects.get_or_create(username=email, defaults={'email': email})
             
-             # Vì là OneToOneField với related_name='profile', bạn có thể truy cập trực tiếp
+            # Vì là OneToOneField với related_name='profile', bạn có thể truy cập trực tiếp
+            # Lấy profile đã được signal tạo ra
             profile = user.profile
-            
-            # 3. Đăng nhập user (Django session login)
-            login(request, user)
 
-            # 4. Tạo JWT token
+            login(request, user)
             tokens = get_tokens_for_user(user)
 
-            # ✅ Tạo workspace mặc định nếu chưa có
-            if not Workspace.objects.filter(owner=user).exists():
-                Workspace.objects.create(name='Hard Spirit', owner=user)
-            profile, _ = Profile.objects.get_or_create(user=user)
-
+            # 3. Xử lý avatar
+            picture = data.get('picture')
             if picture:
                 try:
                     resp_img = requests.get(picture, timeout=5)
@@ -148,23 +128,21 @@ class GoogleLoginView(APIView):
                 except Exception as e:
                     print("Failed to fetch Google avatar:", e)
 
-                # 5. Chuẩn bị URL avatar để trả về
-            if profile.avatar:
-                avatar = request.build_absolute_uri(profile.avatar.url)
-            else:
-                avatar = picture
+            
+            user_data = UserSerializer(user, context={'request': request}).data
 
-            # 5. Trả response về frontend
+            
             return Response({
+                'ok': True,
+                'user': user_data,
+                'name': name,
                 'token': tokens['access'],
                 'refresh': tokens['refresh'],
-                'email': user.email,
-                'name': name,
-                'avatar': avatar,
             })
 
+        except requests.exceptions.HTTPError:
+            return Response({'error': 'Invalid Google token'}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            import traceback
             print('[GoogleLogin] Exception:', str(e))
-            traceback.print_exc()  # ✅ in rõ stacktrace lỗi
-            return Response({'error': 'Internal server error'}, status=500)
+            traceback.print_exc()
+            return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
