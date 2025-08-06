@@ -1,363 +1,193 @@
-# boards/views.py
-from rest_framework.views import APIView
+from rest_framework import viewsets, status, permissions
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
-from .models import Board, Workspace, List, Card, Label
-from .serializers import BoardSerializer
-from .serializers import WorkspaceSerializer, ListSerializer, CardSerializer,LabelSerializer
-from boards.serializers import UserShortSerializer
-from rest_framework import status
-from django.contrib.auth import get_user_model
-from .models import BoardMembership
-from .serializers import BoardMembershipSerializer
-from .decorators import require_board_editor, require_board_viewer,require_card_editor
-# Tạm tắt WebSocket để tránh lỗi Redis
-# channel_layer = get_channel_layer()
+from rest_framework.decorators import action
+from django.shortcuts import get_object_or_404
+from rest_framework.exceptions import PermissionDenied
 
-User = get_user_model()
-
-class BoardListCreateView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request, workspace_id):
-        try:
-            workspace = Workspace.objects.get(id=workspace_id, owner=request.user)
-        except Workspace.DoesNotExist:
-            return Response({'error': 'Workspace not found'}, status=404)
-
-        boards = Board.objects.filter(workspace=workspace)
-        serializer = BoardSerializer(boards, many=True)
-        return Response(serializer.data)
-
-    def post(self, request, workspace_id):
-        try:
-            workspace = Workspace.objects.get(id=workspace_id, owner=request.user)
-        except Workspace.DoesNotExist:
-            return Response({'error': 'Workspace not found'}, status=404)
-
-        serializer = BoardSerializer(data=request.data)
-        if serializer.is_valid():
-            board = serializer.save(workspace=workspace, created_by=request.user)
-
-            DEFAULT_LABEL_COLORS = [
-                '#61bd4f', '#f2d600', '#ff9f1a', '#eb5a46', '#c377e0',
-                '#0079bf', '#00c2e0', '#51e898', '#ff78cb', '#344563',
-            ]
-            for color in DEFAULT_LABEL_COLORS:
-                Label.objects.create(name='', color=color, board=board)
-
-            return Response(serializer.data, status=201)
-        return Response(serializer.errors, status=400)
-
-class WorkspaceListCreateView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        workspaces = Workspace.objects.filter(owner=request.user)
-        serializer = WorkspaceSerializer(workspaces, many=True)
-        return Response(serializer.data)
-
-    def post(self, request):
-        serializer = WorkspaceSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(owner=request.user)
-            return Response(serializer.data, status=201)
-        return Response(serializer.errors, status=400)
-    
-class ListsCreateView(APIView):
-    permission_classes = [IsAuthenticated]
-    @require_board_viewer(lambda self, request, board_id: Board.objects.get(id=board_id))
-    def get(self, request, board_id):
-        try:
-            board = Board.objects.get(id=board_id)
-        except Board.DoesNotExist:
-            return Response({'error': 'Board not found'}, status=404)
-
-        lists = List.objects.filter(board=board).order_by('position')
-        serializer = ListSerializer(lists, many=True)
-        return Response(serializer.data)
-
-    @require_board_editor(lambda self, request, board_id: Board.objects.get(id=board_id))   
-    def post(self, request, board_id):
-        print("📥 Payload:", request.data)  # Debug nếu cần
-        try:
-            board = Board.objects.get(id=board_id)
-        except Board.DoesNotExist:
-            return Response({'error': 'Board not found'}, status=404)
-
-        serializer = ListSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(board=board)  # 👈 Gắn đúng foreign key
-            return Response(serializer.data, status=201)
-
-        return Response(serializer.errors, status=400)
+from .models import Workspace, Board, List, Card, Label, BoardMembership
+from .serializers import (
+    WorkspaceSerializer, BoardSerializer, ListSerializer, CardSerializer,
+    LabelSerializer, BoardMembershipSerializer
+)
+from .permissions import IsBoardOwner, IsBoardEditor, IsBoardMember, CanAccessBoardFromURL
 
 
-class CardListCreateView(APIView):
-    permission_classes = [IsAuthenticated]
-    @require_board_viewer(lambda self, request, list_id: List.objects.get(id=list_id).board)
-    def get(self, request, list_id): 
-        try:
-            list_obj = List.objects.get(id=list_id)
-        except List.DoesNotExist:
-            return Response({'error': 'List not found'}, status=404)
+class WorkspaceViewSet(viewsets.ModelViewSet):
+    serializer_class = WorkspaceSerializer
+    permission_classes = [permissions.IsAuthenticated]
 
-        cards = Card.objects.filter(list=list_obj).order_by('position')
-        serializer = CardSerializer(cards, many=True)
-        return Response(serializer.data)
+    def get_queryset(self):
+        return Workspace.objects.filter(owner=self.request.user)
 
-    @require_board_editor(lambda self, request, list_id: List.objects.get(id=list_id).board)
-    def post(self, request, list_id):  
-        try:
-            list_obj = List.objects.get(id=list_id)
-        except List.DoesNotExist:
-            return Response({'error': 'List not found'}, status=404)
+    def perform_create(self, serializer):
+        serializer.save(owner=self.request.user)
 
-        serializer = CardSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(list=list_obj)
-            return Response(serializer.data, status=201)
+
+class BoardViewSet(viewsets.ModelViewSet):
+    serializer_class = BoardSerializer
+
+
+    def get_queryset(self):
+        # Lọc các board thuộc workspace VÀ user có quyền xem (là owner hoặc member)
+        workspace_boards = Board.objects.filter(workspace_id=self.kwargs['workspace_pk'])
+        user_accessible_boards = Board.objects.filter(members=self.request.user) | Board.objects.filter(created_by=self.request.user)
+        return workspace_boards.intersection(user_accessible_boards).distinct()
+
+    def get_permissions(self):
+        if self.action in ['update', 'partial_update']:
+            self.permission_classes = [permissions.IsAuthenticated, IsBoardEditor]
+        elif self.action == 'destroy':
+            self.permission_classes = [permissions.IsAuthenticated, IsBoardOwner]
+        else: # list, retrieve, create
+            self.permission_classes = [permissions.IsAuthenticated] # Cho phép tạo nếu đã đăng nhập, logic kiểm tra owner workspace ở perform_create
         
-        print("❌ Validation errors:", serializer.errors)
-        return Response(serializer.errors, status=400)
+        # Gọi hàm get_permissions của cha để nó khởi tạo các instance từ self.permission_classes
+        return super().get_permissions()
 
-class InboxCardCreateView(APIView):
-    permission_classes = [IsAuthenticated]
-    
-    def get(self, request):
-        cards = Card.objects.filter(list__isnull=True, created_by=request.user).order_by('position')
-        serializer = CardSerializer(cards, many=True)
-        return Response(serializer.data)
-    
-    def post(self, request):
-        serializer = CardSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(created_by=request.user)
-            return Response(serializer.data, status=201)
-        return Response(serializer.errors, status=400)
+    def perform_create(self, serializer):
+        workspace = get_object_or_404(Workspace, pk=self.kwargs['workspace_pk'])
+        if workspace.owner != self.request.user:
+            raise PermissionDenied("Bạn không có quyền tạo board trong workspace này.")
 
+        board = serializer.save(workspace=workspace, created_by=self.request.user)
 
-class BoardDetailView(APIView):
-    permission_classes = [IsAuthenticated]
+        # Gợi ý: chuyển phần này vào signal nếu dùng lại nhiều
+        DEFAULT_LABEL_COLORS = ['#61bd4f', '#f2d600', '#ff9f1a']
+        for color in DEFAULT_LABEL_COLORS:
+            Label.objects.create(name='', color=color, board=board)
 
-    @require_board_viewer(lambda self, request, workspace_id, board_id: Board.objects.get(id=board_id, workspace_id=workspace_id))
-    def get(self, request, workspace_id, board_id):
-        try:
-            board = Board.objects.get(id=board_id, workspace_id=workspace_id)
-        except Board.DoesNotExist:
-            return Response({'error': 'Board not found'}, status=404)
+class ListViewSet(viewsets.ModelViewSet):
+    serializer_class = ListSerializer
 
-        serializer = BoardSerializer(board)
-        return Response(serializer.data)
-
-class CardDetailView(APIView):
-    permission_classes = [IsAuthenticated]
-    @require_card_editor(lambda self, request, card_id: Card.objects.get(id=card_id))
-    def patch(self, request, card_id):
-        try:
-            card = Card.objects.get(id=card_id)
-        except Card.DoesNotExist:
-            return Response({'error': 'Card not found'}, status=404)
-
-        print("🛠 PATCH data:", request.data)
-
-        serializer = CardSerializer(card, data=request.data, partial=True)
-        if serializer.is_valid():
-            serializer.save()
-
-            #channel_layer = get_channel_layer()
-            #board_id = card.list.board_id if card.list else card.created_by.board_set.first().id
-            #async_to_sync(channel_layer.group_send)(
-            #    f'board_{board_id}',
-            #    {'type': 'card_update'}
-            #)
-            return Response(serializer.data) 
+    def get_queryset(self):
+        # ✅ Queryset đã được lọc an toàn
+        board_pk = self.kwargs.get('board_pk')
+        board = get_object_or_404(Board, pk=board_pk)
         
-        print("❌ Validation error:", serializer.errors)
-        return Response(serializer.errors, status=400)
-
-class ListDetailView(APIView):
-    permission_classes = [IsAuthenticated]
-    @require_board_editor(lambda self, request, list_id: List.objects.get(id=list_id).board)
-    def patch(self, request, list_id):
-        try:
-            list_obj = List.objects.get(id=list_id)
+        # Kiểm tra quyền xem board trước khi trả về list
+        if not IsBoardMember().has_object_permission(self.request, self, board):
+            raise PermissionDenied("Bạn không có quyền xem danh sách của board này.")
             
-        except List.DoesNotExist:
-            return Response({'error': 'List not found'}, status=404)
+        return List.objects.filter(board=board).order_by('position')
 
-        serializer = ListSerializer(list_obj, data=request.data, partial=True)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data)
-        return Response(serializer.errors, status=400)
-
-class BoardMembersView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    @require_board_viewer(lambda self, request, board_id: Board.objects.get(id=board_id))
-    def get(self, request, board_id):
-        try:
-            board = Board.objects.get(id=board_id)
-            members = board.members.all()
-            serializer = UserShortSerializer(members, many=True)
-            return Response(serializer.data)
-        except Board.DoesNotExist:
-            return Response({'error': 'Board not found'}, status=404)
+    def get_permissions(self):
+        """Khai báo các lớp permission cần dùng cho từng action."""
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            self.permission_classes = [permissions.IsAuthenticated, IsBoardEditor]
+        else: # list, retrieve
+            self.permission_classes = [permissions.IsAuthenticated, IsBoardMember]
         
-    def post(self, request, board_id):
-        try:
-            board = Board.objects.get(id=board_id)
-        except Board.DoesNotExist:
-            return Response({'error': 'Board not found'}, status=404)
+        return super().get_permissions() # Để DRF tự xử lý
 
-        # ✅ Chỉ người tạo mới được mời
-        if request.user != board.created_by:
-            return Response({'error': 'Only board creator can invite members'}, status=403)
+    def perform_create(self, serializer):
+        """
+        DRF đã kiểm tra quyền Editor trên Board trước khi gọi hàm này.
+        Chúng ta chỉ cần lấy board và gán nó.
+        """
+        board = get_object_or_404(Board, pk=self.kwargs['board_pk'])
+        serializer.save(board=board)
+
+
+class ListCardViewSet(viewsets.ModelViewSet):
+    serializer_class = CardSerializer
+
+    def get_queryset(self):
+        return Card.objects.filter(list_id=self.kwargs['list_pk']).order_by('position')
+
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [permissions.IsAuthenticated(), IsBoardEditor()]
+        return [permissions.IsAuthenticated(), IsBoardMember()]
+
+    def perform_create(self, serializer):
+        list_obj = get_object_or_404(List, pk=self.kwargs['list_pk'])
+        board = list_obj.board
+
+         # ✅ KIỂM TRA QUYỀN TRỰC TIẾP TRÊN BOARD
+        if not IsBoardEditor().has_object_permission(self.request, self, board):
+            raise PermissionDenied("Bạn không có quyền tạo thẻ trong board này.")
+            
         
-        user_id = request.data.get('user_id')
-        if not user_id:
-            return Response({'error': 'user_id is required'}, status=400)
-
-        try:
-            user = User.objects.get(id=user_id)
-        except User.DoesNotExist:
-            return Response({'error': 'User not found'}, status=404)
-
-        if user in board.members.all():
-            return Response({'message': 'User already in board'}, status=200)
-
-        board.members.add(user)
-        return Response({'message': 'User added successfully'}, status=200)
-class BoardLabelsView(APIView):
-    @require_board_viewer(lambda self, request, board_id: Board.objects.get(id=board_id))
-    def get(self, request, board_id):
-        labels = Label.objects.filter(board_id=board_id)
-        serializer = LabelSerializer(labels, many=True)
-        return Response(serializer.data)
-
-class LabelCreateView(APIView):
-    permission_classes = [IsAuthenticated]
-    @require_board_editor(lambda self, request, board_id: Board.objects.get(id=board_id))
-    def post(self, request, board_id):
-        try:
-            board = Board.objects.get(id=board_id)
-        except Board.DoesNotExist:
-            return Response({"error": "Board not found"}, status=404)
-
-        serializer = LabelSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(board=board)
-            return Response(serializer.data, status=201)
-        return Response(serializer.errors, status=400)
+        serializer.save(list=list_obj, created_by=self.request.user)
 
 
-class LabelDetailView(APIView):
-    permission_classes = [IsAuthenticated]
+class CardViewSet(viewsets.ModelViewSet):
+    serializer_class = CardSerializer
+    permission_classes = [permissions.IsAuthenticated]
 
-    @require_board_editor(lambda self, request, label_id: Label.objects.get(id=label_id).board)
-    def patch(self, request, label_id):
-        try:
-            label = Label.objects.get(id=label_id)
-        except Label.DoesNotExist:
-            return Response({"error": "Label not found"}, status=404)
+    def get_queryset(self):
 
-        serializer = LabelSerializer(label, data=request.data, partial=True)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data)
-        return Response(serializer.errors, status=400)
+        # ✅ LUÔN LUÔN lọc theo user hiện tại để đảm bảo an toàn
+        # Chỉ lấy card inbox do chính user này tạo
+        queryset = Card.objects.filter(created_by=self.request.user, list__isnull=True)
 
-    @require_board_editor(lambda self, request, label_id: Label.objects.get(id=label_id).board)
-    def delete(self, request, label_id):
-        try:
-            label = Label.objects.get(id=label_id)
-            label.delete()
-            return Response(status=204)
-        except Label.DoesNotExist:
-            return Response({"error": "Label not found"}, status=404)
+        board_id = self.request.query_params.get("board")
+        if board_id:
+            queryset = queryset.filter(board_id=board_id)
+        return queryset
+
+    def perform_create(self, serializer):
+        board_id = self.request.data.get('board')
+        if not board_id:
+            raise PermissionDenied("Thiếu board_id để tạo inbox card.")
+        board = get_object_or_404(Board, pk=board_id)
+
+        # Chỉ editor mới được tạo
+        if not IsBoardEditor().has_object_permission(self.request, self, board):
+            raise PermissionDenied("Bạn không có quyền tạo thẻ vào board này.")
+
+        serializer.save(board=board, list=None, created_by=self.request.user)
 
 
+class LabelViewSet(viewsets.ModelViewSet):
+    serializer_class = LabelSerializer
+    permission_classes = [permissions.IsAuthenticated, IsBoardEditor]
 
-class CardBatchUpdateView(APIView):
-    permission_classes = [IsAuthenticated]
+    def get_queryset(self):
+        # ✅ Chỉ trả về các label thuộc các board mà user là thành viên
+        user_boards = self.request.user.boards.all()
+        return Label.objects.filter(board__in=user_boards)
 
-    @require_board_editor(lambda self, request: Board.objects.get(id=request.data[0]['board_id']))
-    def patch(self, request):
-        updates = request.data
-        if not isinstance(updates, list):
-            return Response({"error": "Request body must be a list of updates"}, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            board_id = None
-            for update in updates:
-                card_id = update.get("id")
-                card = Card.objects.get(id=card_id, created_by=request.user)
-                serializer = CardSerializer(card, data=update, partial=True)
-                if serializer.is_valid():
-                    serializer.save()
-                    if not board_id:
-                        board_id = card.list.board_id if card.list else card.created_by.board_set.first().id
-                else:
-                    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+class BoardLabelViewSet(viewsets.ModelViewSet):
+    serializer_class = LabelSerializer
 
-            # Gửi thông báo WebSocket
-            #channel_layer = get_channel_layer()
-            #async_to_sync(channel_layer.group_send)(
-            #    f'board_{board_id}',
-            #    {'type': 'card_update'}
-            #)
-            return Response({"message": "Cards updated successfully"}, status=status.HTTP_200_OK)
-        except Card.DoesNotExist:
-            return Response({"error": "One or more cards not found"}, status=status.HTTP_404_NOT_FOUND)
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    def get_queryset(self):
+        return Label.objects.filter(board_id=self.kwargs['board_pk'])
+
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [permissions.IsAuthenticated(), IsBoardEditor()]
+        return [permissions.IsAuthenticated(), IsBoardMember()]
+
+    def perform_create(self, serializer):
+        board = get_object_or_404(Board, pk=self.kwargs['board_pk'])
+
+         # ✅ KIỂM TRA QUYỀN TRỰC TIẾP TRÊN BOARD
+        if not IsBoardEditor().has_object_permission(self.request, self, board):
+            raise PermissionDenied("Bạn không có quyền tạo label trong board này.")
         
+        serializer.save(board=board)
 
 
-class BoardMembersView(APIView):
-    permission_classes = [IsAuthenticated]
+class BoardMemberViewSet(viewsets.ModelViewSet):
+    serializer_class = BoardMembershipSerializer
 
-    def get(self, request, board_id):   # Get members list of a board
-        try:
-            board = Board.objects.get(id=board_id)
-        except Board.DoesNotExist:
-            return Response({'error': 'Board not found'}, status=404)
+    def get_queryset(self):
+        return BoardMembership.objects.filter(board_id=self.kwargs['board_pk'])
 
-        memberships = BoardMembership.objects.filter(board_id=board_id)
-        serializer = BoardMembershipSerializer(memberships, many=True)
-        return Response(serializer.data)
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [permissions.IsAuthenticated(), IsBoardOwner()]
+        return [permissions.IsAuthenticated(), IsBoardMember()]
 
-    def post(self, request, board_id):  # Invite member
-        try:
-            board = Board.objects.get(id=board_id)
-        except Board.DoesNotExist:
-            return Response({'error': 'Board not found'}, status=404)
+    def perform_create(self, serializer):
+        board = get_object_or_404(Board, pk=self.kwargs['board_pk'])
 
-        if request.user != board.created_by:
-            return Response({'error': 'Only creator can invite'}, status=403)
+        if not IsBoardOwner().has_object_permission(self.request, self, board):
+            raise PermissionDenied("Chỉ người tạo board mới có quyền thêm thành viên.")
+        
+        # TODO: Cần lấy user_id từ request.data và kiểm tra
+        user_id_to_add = self.request.data.get('user_id') 
 
-        user_id = request.data.get('user_id')
-        if BoardMembership.objects.filter(board=board, user_id=user_id).exists():
-            return Response({'message': 'User already in board'}, status=200)
-
-        BoardMembership.objects.create(board=board, user_id=user_id, role='viewer')
-        return Response({'message': 'User added'}, status=201)
-
-    def patch(self, request, board_id):  # Update member role
-        user_id = request.data.get('user_id')
-        new_role = request.data.get('role')
-        if new_role not in ['viewer', 'editor']:
-            return Response({'error': 'Invalid role'}, status=400)
-
-        try:
-            membership = BoardMembership.objects.get(board_id=board_id, user_id=user_id)
-        except BoardMembership.DoesNotExist:
-            return Response({'error': 'Membership not found'}, status=404)
-
-        if request.user != membership.board.created_by:
-            return Response({'error': 'Only creator can change roles'}, status=403)
-
-        membership.role = new_role
-        membership.save()
-        return Response({'message': 'Role updated'}, status=200)
+        serializer.save(board=board, user_id=user_id_to_add) # sửa serializer để nhận user_id
