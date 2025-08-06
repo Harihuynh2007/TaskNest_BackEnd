@@ -1,40 +1,109 @@
 # boards/permissions.py
-from rest_framework.exceptions import PermissionDenied
-from .models import BoardMembership
+from rest_framework import permissions
+from django.shortcuts import get_object_or_404
+from .models import BoardMembership, Board
 
-def check_board_edit_permission(board, user):
+class IsBoardOwner(permissions.BasePermission):
     """
-    Kiểm tra xem user có quyền 'editor' trên board không.
-    Nếu không đủ quyền, raise PermissionDenied.
+    Cho phép truy cập chỉ khi người dùng là người tạo ra board.
+    Dùng cho các hành động nguy hiểm nhất như xóa board.
     """
-    if board.created_by == user:
-        return  # full quyền
+    message = "Chỉ người tạo board mới có quyền thực hiện hành động này."
 
-    try:
-        membership = BoardMembership.objects.get(board=board, user=user)
-        if membership.role != 'editor':
-            raise PermissionDenied("You don't have permission to modify this board.")
-    except BoardMembership.DoesNotExist:
-        raise PermissionDenied("You are not a member of this board.")
+    def has_object_permission(self, request, view, obj):
+        # 'obj' ở đây có thể là Board, List, Card, v.v...
+        # Chúng ta cần tìm ra board gốc.
+        board = None
+        if obj.__class__.__name__ == 'Board':
+            board = obj
+        elif hasattr(obj, 'board'): # List, Label, BoardMembership
+            board = obj.board
+        elif hasattr(obj, 'list') and obj.list is not None: # Card
+            board = obj.list.board
+        
+        if not board:
+            # Trường hợp đặc biệt như card inbox không có board trực tiếp
+            return obj.created_by == request.user if hasattr(obj, 'created_by') else False
+            
+        return board.created_by == request.user
+
+class IsBoardEditor(permissions.BasePermission):
+    """
+    Cho phép truy cập nếu người dùng là owner hoặc có vai trò 'editor'.
+    """
+    message = "Bạn không có quyền chỉnh sửa trên board này."
+
+    def has_permission(self, request, view):
+        # Kiểm tra quyền ở cấp độ View, trước khi có object
+        # Rất hữu ích cho action 'create' trong ViewSet lồng nhau
+        board_pk = view.kwargs.get('board_pk')
+        if not board_pk:
+            return True # Không có board_pk, bỏ qua check ở đây
+
+        board = get_object_or_404(Board, pk=board_pk)
+        return self.has_object_permission(request, view, board)
     
-def check_board_view_permission(board, user):
-    """
-    Raise lỗi nếu user không có quyền xem board (creator hoặc bất kỳ thành viên nào)
-    """
-    if board.created_by == user:
-        return
+    def has_object_permission(self, request, view, obj):
+        board = None
+        if obj.__class__.__name__ == 'Board':
+            board = obj
+        elif hasattr(obj, 'board'):
+            board = obj.board
+        elif hasattr(obj, 'list') and obj.list is not None:
+            board = obj.list.board
+        
+        if not board:
+             return obj.created_by == request.user if hasattr(obj, 'created_by') else False
 
-    if not BoardMembership.objects.filter(board=board, user=user).exists():
-        raise PermissionDenied("You do not have permission to view this board.")
+        if board.created_by == request.user:
+            return True
+            
+        try:
+            membership = BoardMembership.objects.get(board=board, user=request.user)
+            return membership.role == 'editor'
+        except BoardMembership.DoesNotExist:
+            return False
+
+class IsBoardMember(permissions.BasePermission):
+    """
+    Cho phép truy cập nếu người dùng là owner hoặc là thành viên của board (bất kỳ vai trò nào).
+    Thường dùng cho các hành động chỉ cần quyền xem.
+    """
+    message = "Bạn không phải là thành viên của board này."
+
+    def has_object_permission(self, request, view, obj):
+        board = None
+        if obj.__class__.__name__ == 'Board':
+            board = obj
+        elif hasattr(obj, 'board'):
+            board = obj.board
+        elif hasattr(obj, 'list') and obj.list is not None:
+            board = obj.list.board
+
+        if not board:
+            # Cho phép xem card inbox nếu là người tạo
+            return obj.created_by == request.user if hasattr(obj, 'created_by') else False
+        
+        if board.created_by == request.user:
+            return True
+        
+        return board.members.filter(pk=request.user.pk).exists()
     
-def check_card_edit_permission(card, user):
+class CanAccessBoardFromURL(permissions.BasePermission):
     """
-    Cho phép chỉnh sửa card nếu:
-    - Card có list → kiểm tra board như thường
-    - Card không có list (inbox) → chỉ người tạo được chỉnh sửa
+    Kiểm tra xem user có quyền truy cập vào Board
+    được chỉ định bởi 'board_pk' trong URL hay không.
     """
-    if card.list:
-        check_board_edit_permission(card.list.board, user)
-    else:
-        if card.created_by != user:
-            raise PermissionDenied("You don't have permission to modify this inbox card.")
+    def __init__(self, required_permission):
+        self.required_permission = required_permission
+
+    def has_permission(self, request, view):
+        board_pk = view.kwargs.get('board_pk')
+        if not board_pk:
+            return True # Bỏ qua nếu không có board_pk trong URL
+
+        board = get_object_or_404(Board, pk=board_pk)
+        
+        # Dùng lại logic của permission được yêu cầu (IsBoardMember, IsBoardEditor...)
+        permission_instance = self.required_permission()
+        return permission_instance.has_object_permission(request, view, board)    
