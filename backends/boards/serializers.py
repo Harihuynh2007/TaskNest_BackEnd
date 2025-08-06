@@ -48,7 +48,13 @@ class UserShortSerializer(serializers.ModelSerializer):
 
 class BoardMembershipSerializer(serializers.ModelSerializer):
     user = UserShortSerializer(read_only=True)
+    # Thêm user_id, chỉ cho phép ghi (write_only)
+    user_id = serializers.IntegerField(write_only=True)
 
     class Meta:
         model = BoardMembership
-        fields = ['id', 'user', 'role', 'joined_at']
+        # Thêm user_id vào fields
+        fields = ['id', 'user', 'user_id', 'role', 'joined_at']
+        extra_kwargs = {
+            'role': {'required': True} # Nên yêu cầu role khi tạo
+        }
