@@ -47,7 +47,7 @@ INSTALLED_APPS = [
 
     'corsheaders',
     'rest_framework',
-    'auth_app',
+    'auth_app.apps.AuthAppConfig',
     'boards',
     'channels',
     'rest_framework_simplejwt.token_blacklist',
@@ -164,3 +164,6 @@ CHANNEL_LAYERS = {
         },
     },
 }
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'

@@ -7,6 +7,8 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.tokens import RefreshToken
 import requests
 from boards.models import Workspace
+from .models import Profile
+from django.core.files.base import ContentFile
 
 User = get_user_model()
 
@@ -33,6 +35,7 @@ class RegisterView(APIView):
         
         if not Workspace.objects.filter(owner=user).exists():
             Workspace.objects.create(name="Hard Spirit", owner=user)
+            Profile.objects.get_or_create(user=user)
             
         tokens = get_tokens_for_user(user)
         return Response({
@@ -87,10 +90,15 @@ class MeView(APIView):
 
     def get(self, request):
         user = request.user
+        profile = getattr(user, 'profile', None)
+        avatar_url = None
+        if profile and profile.avatar:
+            avatar_url = request.build_absolute_uri(profile.avatar.url)
         return Response({
             "email": user.email or user.username,
             "username": user.username,
-            "role": "admin" if user.is_superuser else "user"
+            "role": "admin" if user.is_superuser else "user",
+            "avatar": avatar_url,
         })
 
 class GoogleLoginView(APIView):
@@ -131,13 +139,31 @@ class GoogleLoginView(APIView):
             # ✅ Tạo workspace mặc định nếu chưa có
             if not Workspace.objects.filter(owner=user).exists():
                 Workspace.objects.create(name='Hard Spirit', owner=user)
+            profile, _ = Profile.objects.get_or_create(user=user)
+
+            if picture:
+                try:
+                    resp_img = requests.get(picture, timeout=5)
+                    resp_img.raise_for_status()
+                    # Tên file: user_<id>.jpg
+                    fname = f'user_{user.id}.jpg'
+                    profile.avatar.save(fname, ContentFile(resp_img.content), save=True)
+                except Exception as e:
+                    print("Failed to fetch Google avatar:", e)
+
+                # 5. Chuẩn bị URL avatar để trả về
+            if profile.avatar:
+                avatar = request.build_absolute_uri(profile.avatar.url)
+            else:
+                avatar = picture
+
             # 5. Trả response về frontend
             return Response({
                 'token': tokens['access'],
                 'refresh': tokens['refresh'],
                 'email': user.email,
                 'name': name,
-                'avatar': picture,
+                'avatar': avatar,
             })
 
         except Exception as e:
