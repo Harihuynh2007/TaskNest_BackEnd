@@ -1,8 +1,9 @@
+# boards/views.py
 from rest_framework import viewsets, status, permissions
 from rest_framework.response import Response
-from rest_framework.decorators import action
+from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from django.db import models
 
 from .models import Workspace, Board, List, Card, Label, BoardMembership
@@ -10,10 +11,16 @@ from .serializers import (
     WorkspaceSerializer, BoardSerializer, ListSerializer, CardSerializer,
     LabelSerializer, BoardMembershipSerializer
 )
-from .permissions import IsBoardOwner, IsBoardEditor, IsBoardMember, CanAccessBoardFromURL
-from rest_framework.views import APIView
+from .permissions import IsBoardOwner, IsBoardEditor, IsBoardMember
+
+# ===================================================================
+# ViewSets cho các tài nguyên chính (Workspace, Board, List, Card, ...)
+# ===================================================================
 
 class WorkspaceViewSet(viewsets.ModelViewSet):
+    """
+    Quản lý Workspaces: /api/workspaces/
+    """
     serializer_class = WorkspaceSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -25,26 +32,18 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
 
 
 class BoardViewSet(viewsets.ModelViewSet):
+    """
+    Quản lý Boards trong một Workspace: /api/workspaces/{workspace_pk}/boards/
+    """
     serializer_class = BoardSerializer
 
-
     def get_queryset(self):
-        """
-        Lấy các board thuộc về workspace được chỉ định trong URL
-        VÀ user hiện tại phải có quyền truy cập (là owner hoặc member).
-        """
-        # 1. Lấy tất cả các board mà user có quyền truy cập
+        workspace_pk = self.kwargs['workspace_pk']
+        workspace = get_object_or_404(Workspace, pk=workspace_pk, owner=self.request.user)
         user = self.request.user
-        user_accessible_boards = Board.objects.filter(
-            models.Q(created_by=user) | models.Q(members=user)
+        return Board.objects.filter(
+            models.Q(workspace=workspace) & (models.Q(created_by=user) | models.Q(members=user))
         ).distinct()
-
-        workspace_pk = self.kwargs.get('workspace_pk')
-        if not workspace_pk:
-            # Trả về rỗng nếu không có workspace_pk để tránh lỗi
-            return Board.objects.none() 
-        
-        return user_accessible_boards.filter(workspace_id=workspace_pk)
 
     def get_permissions(self):
         if self.action in ['update', 'partial_update']:
@@ -52,56 +51,44 @@ class BoardViewSet(viewsets.ModelViewSet):
         elif self.action == 'destroy':
             self.permission_classes = [permissions.IsAuthenticated, IsBoardOwner]
         else: # list, retrieve, create
-            self.permission_classes = [permissions.IsAuthenticated] # Cho phép tạo nếu đã đăng nhập, logic kiểm tra owner workspace ở perform_create
-        
-        # Gọi hàm get_permissions của cha để nó khởi tạo các instance từ self.permission_classes
+            self.permission_classes = [permissions.IsAuthenticated]
         return super().get_permissions()
 
     def perform_create(self, serializer):
-        workspace = get_object_or_404(Workspace, pk=self.kwargs['workspace_pk'])
-        if workspace.owner != self.request.user:
-            raise PermissionDenied("Bạn không có quyền tạo board trong workspace này.")
-
+        workspace = get_object_or_404(Workspace, pk=self.kwargs['workspace_pk'], owner=self.request.user)
         board = serializer.save(workspace=workspace, created_by=self.request.user)
-
-        # Gợi ý: chuyển phần này vào signal nếu dùng lại nhiều
-        DEFAULT_LABEL_COLORS = ['#61bd4f', '#f2d600', '#ff9f1a']
+        # Logic tạo label mặc định có thể để ở đây hoặc chuyển vào signal
+        DEFAULT_LABEL_COLORS = ['#61bd4f', '#f2d600', '#ff9f1a', '#eb5a46', '#c377e0', '#0079bf']
         for color in DEFAULT_LABEL_COLORS:
             Label.objects.create(name='', color=color, board=board)
 
+
 class ListViewSet(viewsets.ModelViewSet):
+    """
+    Quản lý Lists trong một Board: /api/boards/{board_pk}/lists/
+    """
     serializer_class = ListSerializer
 
     def get_queryset(self):
-        # ✅ Queryset đã được lọc an toàn
-        board_pk = self.kwargs.get('board_pk')
-        board = get_object_or_404(Board, pk=board_pk)
-        
-        # Kiểm tra quyền xem board trước khi trả về list
-        if not IsBoardMember().has_object_permission(self.request, self, board):
-            raise PermissionDenied("Bạn không có quyền xem danh sách của board này.")
-            
-        return List.objects.filter(board=board).order_by('position')
+        return List.objects.filter(board_id=self.kwargs['board_pk']).order_by('position')
 
     def get_permissions(self):
-        """Khai báo các lớp permission cần dùng cho từng action."""
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             self.permission_classes = [permissions.IsAuthenticated, IsBoardEditor]
-        else: # list, retrieve
+        else:
             self.permission_classes = [permissions.IsAuthenticated, IsBoardMember]
-        
-        return super().get_permissions() # Để DRF tự xử lý
+        return super().get_permissions()
 
     def perform_create(self, serializer):
-        """
-        DRF đã kiểm tra quyền Editor trên Board trước khi gọi hàm này.
-        Chúng ta chỉ cần lấy board và gán nó.
-        """
         board = get_object_or_404(Board, pk=self.kwargs['board_pk'])
+        # DRF đã kiểm tra quyền Editor trên Board thông qua has_permission
         serializer.save(board=board)
 
 
 class ListCardViewSet(viewsets.ModelViewSet):
+    """
+    Quản lý Cards trong một List: /api/lists/{list_pk}/cards/
+    """
     serializer_class = CardSerializer
 
     def get_queryset(self):
@@ -109,58 +96,74 @@ class ListCardViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [permissions.IsAuthenticated(), IsBoardEditor()]
-        return [permissions.IsAuthenticated(), IsBoardMember()]
+            self.permission_classes = [permissions.IsAuthenticated, IsBoardEditor]
+        else:
+            self.permission_classes = [permissions.IsAuthenticated, IsBoardMember]
+        return super().get_permissions()
 
     def perform_create(self, serializer):
+        board = get_object_or_404(Board, pk=self.kwargs['board_pk'])
         list_obj = get_object_or_404(List, pk=self.kwargs['list_pk'])
-        board = list_obj.board
-
-         # ✅ KIỂM TRA QUYỀN TRỰC TIẾP TRÊN BOARD
-        if not IsBoardEditor().has_object_permission(self.request, self, board):
-            raise PermissionDenied("Bạn không có quyền tạo thẻ trong board này.")
-            
-        
-        serializer.save(list=list_obj, created_by=self.request.user)
-
+        # DRF đã kiểm tra quyền Editor trên Board của List
+        serializer.save(list=list_obj, board=list_obj.board, created_by=self.request.user)
+        serializer.save(board=board)
 
 class CardViewSet(viewsets.ModelViewSet):
+    """
+    Quản lý Cards không lồng nhau (Inbox cards và các thao tác update/delete bằng card_id)
+    /api/cards/
+    """
     serializer_class = CardSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
+        # Chỉ trả về card do user tạo và không thuộc list nào (inbox)
+        return Card.objects.filter(created_by=self.request.user, list__isnull=True)
 
-        # ✅ LUÔN LUÔN lọc theo user hiện tại để đảm bảo an toàn
-        # Chỉ lấy card inbox do chính user này tạo
-        queryset = Card.objects.filter(created_by=self.request.user, list__isnull=True)
-
-        board_id = self.request.query_params.get("board")
-        if board_id:
-            queryset = queryset.filter(board_id=board_id)
-        return queryset
-
+    def get_permissions(self):
+        if self.action in ['update', 'partial_update', 'destroy']:
+            self.permission_classes = [permissions.IsAuthenticated, IsBoardEditor]
+        else: # list, create, retrieve
+            self.permission_classes = [permissions.IsAuthenticated]
+        return super().get_permissions()
+    
     def perform_create(self, serializer):
         board_id = self.request.data.get('board')
+
         if not board_id:
-            raise PermissionDenied("Thiếu board_id để tạo inbox card.")
+            raise ValidationError("Phải cung cấp 'board_id' để tạo inbox card.")
+        
         board = get_object_or_404(Board, pk=board_id)
 
-        # Chỉ editor mới được tạo
+        # Vì board_id đến từ payload, phải kiểm tra quyền thủ công
         if not IsBoardEditor().has_object_permission(self.request, self, board):
-            raise PermissionDenied("Bạn không có quyền tạo thẻ vào board này.")
-
+            raise PermissionDenied("Bạn không có quyền tạo thẻ trong board này.")
+            
         serializer.save(board=board, list=None, created_by=self.request.user)
 
-
 class LabelViewSet(viewsets.ModelViewSet):
+    """
+    Quản lý các thao tác trên một Label cụ thể bằng ID của nó.
+    /api/labels/{id}/
+    """
     serializer_class = LabelSerializer
-    permission_classes = [permissions.IsAuthenticated, IsBoardEditor]
+    # Chỉ cho phép các hành động trên một object, không cho list hay create ở đây
+    http_method_names = ['get', 'patch', 'delete', 'head', 'options']
 
     def get_queryset(self):
-        # ✅ Chỉ trả về các label thuộc các board mà user là thành viên
-        user_boards = self.request.user.boards.all()
+        # User chỉ có thể truy cập label của các board họ là thành viên
+        user_boards = Board.objects.filter(
+            models.Q(created_by=self.request.user) | models.Q(members=self.request.user)
+        ).distinct()
         return Label.objects.filter(board__in=user_boards)
 
+    def get_permissions(self):
+        # Khi sửa/xóa, cần quyền editor trên board của label
+        if self.action in ['partial_update', 'destroy']:
+            self.permission_classes = [permissions.IsAuthenticated, IsBoardEditor]
+        else: # retrieve
+            self.permission_classes = [permissions.IsAuthenticated, IsBoardMember]
+        return super().get_permissions()
 
 class BoardLabelViewSet(viewsets.ModelViewSet):
     serializer_class = LabelSerializer
@@ -170,20 +173,22 @@ class BoardLabelViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [permissions.IsAuthenticated(), IsBoardEditor()]
-        return [permissions.IsAuthenticated(), IsBoardMember()]
+            self.permission_classes = [permissions.IsAuthenticated, IsBoardEditor]
+        else:
+            self.permission_classes = [permissions.IsAuthenticated, IsBoardMember]
+        return super().get_permissions()
 
     def perform_create(self, serializer):
         board = get_object_or_404(Board, pk=self.kwargs['board_pk'])
-
-         # ✅ KIỂM TRA QUYỀN TRỰC TIẾP TRÊN BOARD
-        if not IsBoardEditor().has_object_permission(self.request, self, board):
-            raise PermissionDenied("Bạn không có quyền tạo label trong board này.")
-        
+        # DRF đã kiểm tra quyền
         serializer.save(board=board)
 
 
+
 class BoardMemberViewSet(viewsets.ModelViewSet):
+    """
+    Quản lý Members trong một Board: /api/boards/{board_pk}/members/
+    """
     serializer_class = BoardMembershipSerializer
 
     def get_queryset(self):
@@ -191,69 +196,64 @@ class BoardMemberViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [permissions.IsAuthenticated(), IsBoardOwner()]
-        return [permissions.IsAuthenticated(), IsBoardMember()]
+            self.permission_classes = [permissions.IsAuthenticated, IsBoardOwner]
+        else:
+            self.permission_classes = [permissions.IsAuthenticated, IsBoardMember]
+        return super().get_permissions()
 
     def perform_create(self, serializer):
         board = get_object_or_404(Board, pk=self.kwargs['board_pk'])
+        # DRF đã kiểm tra quyền Owner
+        serializer.save(board=board)
 
-        if not IsBoardOwner().has_object_permission(self.request, self, board):
-            raise PermissionDenied("Chỉ người tạo board mới có quyền thêm thành viên.")
-        
-        # TODO: Cần lấy user_id từ request.data và kiểm tra
-        user_id_to_add = self.request.data.get('user_id') 
-
-        serializer.save(board=board, user_id=user_id_to_add) # sửa serializer để nhận user_id
-
+# ===================================================================
+# APIViews cho các hành động đặc biệt
+# ===================================================================
 
 class CardBatchUpdateView(APIView):
+    """
+    Endpoint để cập nhật hàng loạt vị trí của cards: /api/cards/batch-update/
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     def patch(self, request, *args, **kwargs):
         updates = request.data
         if not isinstance(updates, list):
-            return Response({'error': 'Expected a list of card updates.'}, status=400)
+            return Response({'error': 'Request body phải là một danh sách.'}, status=400)
         
-        updated_cards = []
+        updated_cards_data = []
         for card_data in updates:
             card_id = card_data.get('id')
-            if not card_id:
-                continue
-            
             try:
-                card = Card.objects.get(pk=card_id)
+                card = Card.objects.select_related('list__board').get(pk=card_id)
+                # Dùng permission class để kiểm tra quyền một cách nhất quán
+                if IsBoardEditor().has_object_permission(request, self, card):
+                    serializer = CardSerializer(card, data=card_data, partial=True)
+                    if serializer.is_valid(raise_exception=True):
+                        serializer.save()
+                        updated_cards_data.append(serializer.data)
             except Card.DoesNotExist:
-                continue
+                continue # Bỏ qua nếu card không tồn tại
 
-            # ✅ Chỉ cho phép sửa nếu user là editor của board
-            board = card.board or (card.list.board if card.list else None)
-            if not board or not IsBoardEditor().has_object_permission(request, self, board):
-                continue
-
-            serializer = CardSerializer(card, data=card_data, partial=True)
-            if serializer.is_valid():
-                serializer.save()
-                updated_cards.append(serializer.data)
-
-        return Response(updated_cards, status=200)
+        return Response(updated_cards_data, status=200)
     
 class JoinBoardByLinkView(APIView):
+    """
+    Endpoint để tham gia board qua link mời: /api/join/{token}/
+    """
     permission_classes = [permissions.IsAuthenticated]
 
-    def get(self, request, token, *args, **kwargs):
-        try:
-            board = Board.objects.get(invite_token=token)
-        except Board.DoesNotExist:
-            return Response({"error": "Invalid or expired invite link."}, status=404)
+    def post(self, request, token, *args, **kwargs):
+        # Giả sử model Board có trường `join_link_token` và `is_join_link_enabled`
+        board = get_object_or_404(Board, join_link_token=token, is_join_link_enabled=True)
         
-        # Nếu user đã là thành viên → bỏ qua
-        if board.members.filter(pk=request.user.pk).exists():
-            return Response({"message": "You are already a member of this board."}, status=200)
-        
-        # Thêm vào board với vai trò mặc định
-        BoardMembership.objects.create(
+        membership, created = BoardMembership.objects.get_or_create(
             board=board,
             user=request.user,
-            role='member'
+            defaults={'role': board.join_link_role}
         )
-        return Response({"message": "You have successfully joined the board."}, status=200)    
+
+        if not created:
+            return Response({"message": "Bạn đã là thành viên của board này."}, status=200)
+        
+        return Response({"message": "Bạn đã tham gia board thành công."}, status=201)

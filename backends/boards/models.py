@@ -39,6 +39,8 @@ class Card(models.Model):
     description = models.TextField(blank=True)
     due_date = models.DateTimeField(null=True, blank=True)
     completed = models.BooleanField(default=False)
+
+    board = models.ForeignKey(Board, on_delete=models.CASCADE, related_name='cards', null=True)
     list = models.ForeignKey(List, on_delete=models.CASCADE, null=True, blank=True)  # ✅ rename từ listid → list
     STATUS_CHOICES = [
         ('doing', 'Doing'),
