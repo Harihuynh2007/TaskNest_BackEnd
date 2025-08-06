@@ -110,15 +110,35 @@ class ListCardViewSet(viewsets.ModelViewSet):
 
 class CardViewSet(viewsets.ModelViewSet):
     """
-    Quản lý Cards không lồng nhau (Inbox cards và các thao tác update/delete bằng card_id)
-    /api/cards/
+    Quản lý Cards không lồng nhau.
+    - GET /api/cards/?board_id=X : Lấy card inbox của board X
+    - POST /api/cards/ : Tạo card inbox (cần board_id trong payload)
+    - PATCH /api/cards/{id}/ : Cập nhật 1 card cụ thể (bất kể list)
     """
     serializer_class = CardSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        # Chỉ trả về card do user tạo và không thuộc list nào (inbox)
-        return Card.objects.filter(created_by=self.request.user, list__isnull=True)
+        user = self.request.user
+        
+        # --- THAY ĐỔI QUAN TRỌNG ---
+        # 1. Lấy queryset cơ sở là tất cả các card mà user có quyền xem
+        user_boards = Board.objects.filter(
+            models.Q(created_by=user) | models.Q(members=user)
+        ).distinct()
+        queryset = Card.objects.filter(board__in=user_boards)
+
+        # 2. Nếu là request GET để lấy danh sách (cho Inbox) thì lọc thêm
+        if self.action == 'list':
+            board_id = self.request.query_params.get('board_id')
+            if board_id:
+                # Chỉ trả về card inbox của board được chỉ định
+                return queryset.filter(board_id=board_id, list__isnull=True).order_by('position')
+            # Nếu không có board_id, trả về rỗng để tránh nhầm lẫn
+            return Card.objects.none()
+
+        # 3. Cho các action khác (retrieve, update, delete), dùng queryset cơ sở
+        return queryset
 
     def get_permissions(self):
         if self.action in ['update', 'partial_update', 'destroy']:
