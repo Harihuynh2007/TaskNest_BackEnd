@@ -33,9 +33,6 @@ class RegisterView(APIView):
 
         user = User.objects.create_user(username=email, email=email, password=password)
         
-        if not Workspace.objects.filter(owner=user).exists():
-            Workspace.objects.create(name="Hard Spirit", owner=user)
-            Profile.objects.get_or_create(user=user)
             
         tokens = get_tokens_for_user(user)
         return Response({
@@ -67,9 +64,6 @@ class LoginView(APIView):
 
         login(req, user)
         tokens = get_tokens_for_user(user)
-
-        if not Workspace.objects.filter(owner=user).exists():
-            Workspace.objects.create(name="Hard Spirit", owner=user)
 
         return Response({
             "ok": True,
@@ -129,7 +123,10 @@ class GoogleLoginView(APIView):
 
             # 2. Lấy hoặc tạo user
             user, created = User.objects.get_or_create(username=email, defaults={'email': email})
-
+            
+             # Vì là OneToOneField với related_name='profile', bạn có thể truy cập trực tiếp
+            profile = user.profile
+            
             # 3. Đăng nhập user (Django session login)
             login(request, user)
 
