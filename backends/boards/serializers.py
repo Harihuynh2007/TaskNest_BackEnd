@@ -1,6 +1,6 @@
 # backends/boards/serializers.py
 from rest_framework import serializers
-from .models import Board, Workspace, List, Card, Label, BoardMembership
+from .models import Board, Workspace, List, Card, Label, BoardMembership,BoardInviteLink
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
@@ -78,3 +78,10 @@ class BoardMembershipSerializer(serializers.ModelSerializer):
     class Meta:
         model = BoardMembership
         fields = ['id', 'user', 'role', 'joined_at']
+
+
+class BoardInviteLinkSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BoardInviteLink
+        fields = ['token', 'role', 'created_at', 'expires_at', 'is_active']
+        read_only_fields = ['token', 'created_at']

@@ -14,6 +14,9 @@ from .views import (
     LabelDetailView,
     CardBatchUpdateView,
     ClosedBoardsListView,
+    BoardShareLinkView,
+    BoardJoinByLinkView,
+
 )
 
 urlpatterns = [
@@ -44,5 +47,7 @@ urlpatterns = [
 
     path('boards/closed/', ClosedBoardsListView.as_view(), name='closed-board-list'),
 
-    
+    path('boards/<int:board_id>/share-link/', BoardShareLinkView.as_view(), name='board-share-link'),
+    path('boards/join/<uuid:token>/', BoardJoinByLinkView.as_view(), name='board-join-by-link'),
+
 ]

@@ -2,6 +2,8 @@
 from django.db import models
 from django.contrib.auth import get_user_model
 from django.conf import settings
+import uuid
+from datetime import datetime, timedelta
 
 User = get_user_model()
 
@@ -71,3 +73,31 @@ class BoardMembership(models.Model):
     class Meta:
         unique_together = ('board', 'user')
 
+
+class BoardInviteLink(models.Model):
+    ROLE_CHOICES = [
+        ('member', 'Member'),
+        ('admin', 'Admin'),
+        ('observer', 'Observer'),
+    ]
+    
+    board = models.OneToOneField('Board', on_delete=models.CASCADE, related_name='invite_link')
+    token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='member')
+    created_by = models.ForeignKey(User, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    
+    class Meta:
+        db_table = 'boards_boardinvitelink'
+        verbose_name = 'Board Invite Link'
+        verbose_name_plural = 'Board Invite Links'
+    
+    def __str__(self):
+        return f"Invite link for {self.board.name}"
+    
+    def is_expired(self):
+        if not self.expires_at:
+            return False
+        return datetime.now() > self.expires_at 

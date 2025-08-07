@@ -1,6 +1,7 @@
 # auth_app/models.py
 from django.db import models
 from django.conf import settings
+import uuid
 
 def avatar_upload_to(instance, filename):
     return f'avatars/user_{instance.user.id}/{filename}'

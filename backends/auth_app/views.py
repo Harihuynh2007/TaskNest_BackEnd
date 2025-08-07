@@ -9,12 +9,13 @@ import requests
 from boards.models import Workspace
 from django.core.files.base import ContentFile
 import traceback
+from django.db.models import Q
 
 from .serializers import (
     RegisterSerializer,
     LoginSerializer,
     UserSerializer,
-    GoogleLoginSerializer
+    GoogleLoginSerializer,
 )
 
 User = get_user_model()
@@ -146,3 +147,21 @@ class GoogleLoginView(APIView):
             print('[GoogleLogin] General Exception:', str(e))
             traceback.print_exc()
             return Response({'error': 'An internal server error occurred.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+class UserSearchView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        query = request.query_params.get('q', '')
+        if len(query) < 2: # Chỉ tìm kiếm khi có ít nhất 2 ký tự
+            return Response([], status=status.HTTP_200_OK)
+
+        users = User.objects.filter(
+            Q(username__icontains=query) | Q(email__icontains=query)
+        )[:10] # Giới hạn kết quả trả về
+
+        # Dùng lại UserSerializer nhưng không cần context
+        serializer = UserSerializer(users, many=True)
+        return Response(serializer.data)        
+    
+

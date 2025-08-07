@@ -8,8 +8,8 @@ from .serializers import WorkspaceSerializer, ListSerializer, CardSerializer,Lab
 from boards.serializers import UserShortSerializer
 from rest_framework import status
 from django.contrib.auth import get_user_model
-from .models import BoardMembership
-from .serializers import BoardMembershipSerializer
+from .models import BoardMembership,BoardInviteLink
+from .serializers import BoardMembershipSerializer,BoardInviteLinkSerializer
 from .decorators import require_board_editor, require_board_viewer,require_card_editor
 
 from django.db.models import Q
@@ -281,30 +281,94 @@ class BoardMembersView(APIView):
         except Board.DoesNotExist:
             return Response({'error': 'Board not found'}, status=404)
         
+    @require_board_editor(lambda self, request, board_id: Board.objects.get(id=board_id))  
     def post(self, request, board_id):
+
         try:
             board = Board.objects.get(id=board_id)
         except Board.DoesNotExist:
             return Response({'error': 'Board not found'}, status=404)
 
-        # ✅ Chỉ người tạo mới được mời
+        # 1. Kiểm tra quyền của người mời (decorator đã làm, nhưng kiểm tra lại cho chắc)
+        # Trello cho phép editor mời, nhưng chúng ta có thể giới hạn cho creator
         if request.user != board.created_by:
-            return Response({'error': 'Only board creator can invite members'}, status=403)
+            return Response({'error': 'Only the board creator can invite new members.'}, status=status.HTTP_403_FORBIDDEN)
         
-        user_id = request.data.get('user_id')
-        if not user_id:
-            return Response({'error': 'user_id is required'}, status=400)
+        user_id_to_invite = request.data.get('user_id')
+
+        # 2. Validate input
+        if not user_id_to_invite:
+            return Response({'error': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 3. Kiểm tra user được mời có tồn tại không
+        try:
+            user_to_invite = User.objects.get(id=user_id_to_invite)
+        except User.DoesNotExist:
+            return Response({'error': 'User to invite not found'}, status=status.HTTP_404_NOT_FOUND)
+
+         # 4. Kiểm tra user đã là thành viên hay creator chưa
+        if BoardMembership.objects.filter(board=board, user=user_to_invite).exists() or board.created_by == user_to_invite:
+            return Response({'message': 'User is already a member of this board.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 5. Tất cả đã hợp lệ -> Tạo membership
+        role = request.data.get('role', 'viewer') # Lấy role từ request, mặc định là viewer
+        if role not in ['viewer', 'editor']:
+            role = 'viewer' # Đảm bảo role hợp lệ
+
+        membership = BoardMembership.objects.create(board=board, user=user_to_invite, role=role)
+        
+        serializer = BoardMembershipSerializer(membership)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    @require_board_editor(lambda self, request, board_id: Board.objects.get(id=board_id))
+    def patch(self, request, board_id): # Cập nhật vai trò
+        user_id_to_update = request.data.get('user_id')
+        new_role = request.data.get('role')
+
+        if not user_id_to_update or not new_role:
+            return Response({'error': 'user_id and role are required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if new_role not in ['editor', 'viewer']:
+            return Response({'error': 'Invalid role'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            user = User.objects.get(id=user_id)
-        except User.DoesNotExist:
-            return Response({'error': 'User not found'}, status=404)
+            membership = BoardMembership.objects.get(board_id=board_id, user_id=user_id_to_update)
+            
+            # Chỉ creator mới được thay đổi vai trò
+            if request.user != membership.board.created_by:
+                return Response({'error': 'Only the board creator can change roles'}, status=status.HTTP_403_FORBIDDEN)
+            
+            membership.role = new_role
+            membership.save()
+            
+            # Trả về thông tin member đã được cập nhật
+            serializer = BoardMembershipSerializer(membership)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except BoardMembership.DoesNotExist:
+            return Response({'error': 'Membership not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+    @require_board_editor(lambda self, request, board_id: Board.objects.get(id=board_id))
+    def delete(self, request, board_id): # Xóa thành viên
+        user_id_to_remove = request.data.get('user_id')
+        
+        if not user_id_to_remove:
+            return Response({'error': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if user in board.members.all():
-            return Response({'message': 'User already in board'}, status=200)
+        try:
+            membership = BoardMembership.objects.get(board_id=board_id, user_id=user_id_to_remove)
+            
+            # Creator không thể bị xóa khỏi board
+            if membership.user == membership.board.created_by:
+                return Response({'error': 'Cannot remove the board creator'}, status=status.HTTP_400_BAD_REQUEST)
 
-        board.members.add(user)
-        return Response({'message': 'User added successfully'}, status=200)
+            # Chỉ creator hoặc chính user đó mới được quyền xóa
+            if not (request.user == membership.board.created_by or request.user.id == int(user_id_to_remove)):
+                 return Response({'error': 'You do not have permission to remove this member'}, status=status.HTTP_403_FORBIDDEN)
+            
+            membership.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except BoardMembership.DoesNotExist:
+            return Response({'error': 'Membership not found'}, status=status.HTTP_404_NOT_FOUND)    
 class BoardLabelsView(APIView):
     @require_board_viewer(lambda self, request, board_id: Board.objects.get(id=board_id))
     def get(self, request, board_id):
@@ -404,21 +468,43 @@ class BoardMembersView(APIView):
         serializer = BoardMembershipSerializer(memberships, many=True)
         return Response(serializer.data)
 
-    def post(self, request, board_id):  # Invite member
+    @require_board_editor(lambda self, request, board_id: Board.objects.get(id=board_id))
+    def post(self, request, board_id): # Mời thành viên mới
         try:
             board = Board.objects.get(id=board_id)
         except Board.DoesNotExist:
-            return Response({'error': 'Board not found'}, status=404)
+            return Response({'error': 'Board not found'}, status=status.HTTP_404_NOT_FOUND)
 
+        # 1. Kiểm tra quyền của người mời (có thể chỉ cho creator)
         if request.user != board.created_by:
-            return Response({'error': 'Only creator can invite'}, status=403)
+            return Response({'error': 'Only the board creator can invite new members.'}, status=status.HTTP_403_FORBIDDEN)
+        
+        user_id_to_invite = request.data.get('user_id')
+        
+        # 2. Validate input: Đảm bảo user_id được gửi lên
+        if not user_id_to_invite:
+            return Response({'error': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        user_id = request.data.get('user_id')
-        if BoardMembership.objects.filter(board=board, user_id=user_id).exists():
-            return Response({'message': 'User already in board'}, status=200)
+        # 3. Kiểm tra user được mời có tồn tại không
+        try:
+            user_to_invite = User.objects.get(id=user_id_to_invite)
+        except User.DoesNotExist:
+            return Response({'error': 'User to invite not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        BoardMembership.objects.create(board=board, user_id=user_id, role='viewer')
-        return Response({'message': 'User added'}, status=201)
+        # 4. Kiểm tra xem user đã là thành viên hay chưa
+        if BoardMembership.objects.filter(board=board, user=user_to_invite).exists():
+            return Response({'message': 'User is already a member of this board.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 5. Tất cả đã hợp lệ -> Tạo membership
+        # Lấy vai trò từ request, mặc định là 'viewer'
+        role = request.data.get('role', 'viewer')
+        if role not in ['editor', 'viewer']:
+            role = 'viewer'
+
+        membership = BoardMembership.objects.create(board=board, user=user_to_invite, role=role)
+        
+        serializer = BoardMembershipSerializer(membership)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def patch(self, request, board_id):  # Update member role
         user_id = request.data.get('user_id')
@@ -437,3 +523,77 @@ class BoardMembersView(APIView):
         membership.role = new_role
         membership.save()
         return Response({'message': 'Role updated'}, status=200)
+
+    # ✅ THÊM TOÀN BỘ METHOD NÀY VÀO
+    @require_board_editor(lambda self, request, board_id: Board.objects.get(id=board_id))
+    def delete(self, request, board_id): # Xóa thành viên
+        user_id_to_remove = request.data.get('user_id')
+        
+        if not user_id_to_remove:
+            return Response({'error': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            membership = BoardMembership.objects.get(board_id=board_id, user_id=user_id_to_remove)
+            
+            # Người tạo board không thể bị xóa
+            if membership.user == membership.board.created_by:
+                return Response({'error': 'Cannot remove the board creator'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Chỉ người tạo hoặc chính user đó mới có quyền tự xóa mình
+            if not (request.user == membership.board.created_by or request.user.id == int(user_id_to_remove)):
+                 return Response({'error': 'You do not have permission to remove this member'}, status=status.HTTP_403_FORBIDDEN)
+            
+            membership.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except BoardMembership.DoesNotExist:
+            return Response({'error': 'Membership not found'}, status=status.HTTP_404_NOT_FOUND)
+
+class BoardShareLinkView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @require_board_editor(lambda self, request, board_id: Board.objects.get(id=board_id))
+    def get(self, request, board_id):
+        # lấy link đang hoạt động (nếu có)
+        invite = BoardInviteLink.objects.filter(board_id=board_id, is_active=True).first()
+        if not invite:
+            return Response({'detail': 'No active invite link'}, status=404)
+        serializer = BoardInviteLinkSerializer(invite)
+        return Response(serializer.data)
+
+    @require_board_editor(lambda self, request, board_id: Board.objects.get(id=board_id))
+    def post(self, request, board_id):
+        role = request.data.get('role', 'member')
+        # tạo mới hoặc update role cho link hiện có
+        invite, _ = BoardInviteLink.objects.update_or_create(
+            board_id=board_id,
+            defaults={'role': role, 'is_active': True, 'created_by': request.user}
+        )
+        serializer = BoardInviteLinkSerializer(invite)
+        return Response(serializer.data)
+
+    @require_board_editor(lambda self, request, board_id: Board.objects.get(id=board_id))
+    def delete(self, request, board_id):
+        BoardInviteLink.objects.filter(board_id=board_id, is_active=True).update(is_active=False)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    
+
+class BoardJoinByLinkView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, token):
+        try:
+            invite = BoardInviteLink.objects.get(token=token, is_active=True)
+        except BoardInviteLink.DoesNotExist:
+            return Response({'detail': 'Invalid or expired link'}, status=404)
+
+        board = invite.board
+        user = request.user
+
+        # Nếu đã là thành viên thì không cần thêm nữa
+        if BoardMembership.objects.filter(board=board, user=user).exists():
+            return Response({'detail': 'Already a member'}, status=400)
+
+        # map role của link thành role trong BoardMembership
+        membership_role = 'editor' if invite.role == 'member' else 'viewer'
+        BoardMembership.objects.create(board=board, user=user, role=membership_role)
+        return Response({'detail': 'Joined board successfully'})

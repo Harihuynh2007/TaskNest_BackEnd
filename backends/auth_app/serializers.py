@@ -138,3 +138,7 @@ class GoogleLoginSerializer(serializers.Serializer):
     Serializer để validate token từ Google.
     """
     token = serializers.CharField(write_only=True, required=True)
+
+# ----------------- 5. Serializer cho chức năng INVITE -----------------
+
+
