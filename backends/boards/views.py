@@ -175,6 +175,17 @@ class CardDetailView(APIView):
         
         print("❌ Validation error:", serializer.errors)
         return Response(serializer.errors, status=400)
+    
+    @require_card_editor(lambda self, request, card_id: Card.objects.get(id=card_id))
+    def delete(self, request, card_id):
+        try:
+            card = Card.objects.get(id=card_id)
+            card.delete()
+            # Trả về 204 No Content là chuẩn RESTful cho hành động xóa thành công
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except Card.DoesNotExist:
+            return Response({'error': 'Card not found'}, status=status.HTTP_404_NOT_FOUND)
+        
 
 class ListDetailView(APIView):
     permission_classes = [IsAuthenticated]
