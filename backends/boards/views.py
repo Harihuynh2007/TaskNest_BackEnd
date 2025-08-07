@@ -202,6 +202,23 @@ class ListDetailView(APIView):
             serializer.save()
             return Response(serializer.data)
         return Response(serializer.errors, status=400)
+    
+    @require_board_editor(lambda self, request, list_id: List.objects.get(id=list_id).board)
+    def delete(self, request, list_id):
+        try:
+            list_obj = List.objects.get(id=list_id)
+
+            # Logic mới: Chuyển tất cả card trong list này về trạng thái "inbox"
+            # bằng cách gán `list` của chúng thành None.
+            Card.objects.filter(list=list_obj).update(list=None)
+
+            # Sau khi đã "giải phóng" các card, tiến hành xóa list rỗng
+            list_obj.delete()
+            
+            # Trả về thành công
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except List.DoesNotExist:
+            return Response({'error': 'List not found'}, status=status.HTTP_404_NOT_FOUND)
 
 class BoardMembersView(APIView):
     permission_classes = [IsAuthenticated]
