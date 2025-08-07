@@ -13,6 +13,7 @@ from .views import (
     LabelCreateView,
     LabelDetailView,
     CardBatchUpdateView,
+    ClosedBoardsListView,
 )
 
 urlpatterns = [
@@ -40,6 +41,8 @@ urlpatterns = [
     path('labels/<int:label_id>/', LabelDetailView.as_view(), name='label-detail'),
 
     path('cards/batch-update/', CardBatchUpdateView.as_view(), name='card-batch-update'),
+
+    path('boards/closed/', ClosedBoardsListView.as_view(), name='closed-board-list'),
 
     
 ]

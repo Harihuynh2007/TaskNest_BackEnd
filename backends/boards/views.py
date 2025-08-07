@@ -11,6 +11,8 @@ from django.contrib.auth import get_user_model
 from .models import BoardMembership
 from .serializers import BoardMembershipSerializer
 from .decorators import require_board_editor, require_board_viewer,require_card_editor
+
+from django.db.models import Q
 # Tạm tắt WebSocket để tránh lỗi Redis
 # channel_layer = get_channel_layer()
 
@@ -25,7 +27,7 @@ class BoardListCreateView(APIView):
         except Workspace.DoesNotExist:
             return Response({'error': 'Workspace not found'}, status=404)
 
-        boards = Board.objects.filter(workspace=workspace)
+        boards = Board.objects.filter(workspace=workspace, is_closed=False)
         serializer = BoardSerializer(boards, many=True)
         return Response(serializer.data)
 
@@ -150,6 +152,52 @@ class BoardDetailView(APIView):
         serializer = BoardSerializer(board)
         return Response(serializer.data)
 
+    @require_board_editor(lambda self, request, workspace_id, board_id: Board.objects.get(id=board_id))
+    def patch(self, request, workspace_id, board_id):
+        try:
+            board = Board.objects.get(id=board_id, workspace_id=workspace_id)
+        except Board.DoesNotExist:
+            return Response({'error': 'Board not found'}, status=4.404)
+        
+        # Chỉ cho phép cập nhật một số trường nhất định, ví dụ `is_closed`
+        # Điều này an toàn hơn là dùng serializer đầy đủ
+        if 'is_closed' in request.data:
+            board.is_closed = request.data['is_closed']
+            board.save(update_fields=['is_closed'])
+        
+        serializer = BoardSerializer(board)
+        return Response(serializer.data)
+    
+    # Chỉ chủ sở hữu (creator) mới được xóa vĩnh viễn
+    def delete(self, request, workspace_id, board_id):
+        try:
+            board = Board.objects.get(id=board_id, workspace_id=workspace_id)
+            # Kiểm tra quyền hạn nghiêm ngặt
+            if board.created_by != request.user:
+                return Response({'error': 'Only the board creator can permanently delete the board.'}, status=status.HTTP_403_FORBIDDEN)
+            
+            board.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except Board.DoesNotExist:
+            return Response({'error': 'Board not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+class ClosedBoardsListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # Lấy tất cả các board mà user là owner HOẶC là member, VÀ board đó đã đóng
+        user_boards = Board.objects.filter(
+            Q(created_by=request.user) | Q(members=request.user),
+            is_closed=True
+        ).distinct() # Dùng distinct() để tránh trả về board trùng lặp nếu user vừa là owner vừa là member
+
+        # Chúng ta cần thông tin workspace của mỗi board, nên dùng prefetch_related
+        user_boards = user_boards.prefetch_related('workspace')
+
+        # Dùng BoardSerializer hiện tại là đủ, vì nó đã có các trường cần thiết
+        serializer = BoardSerializer(user_boards, many=True)
+        return Response(serializer.data)
+    
 class CardDetailView(APIView):
     permission_classes = [IsAuthenticated]
     @require_card_editor(lambda self, request, card_id: Card.objects.get(id=card_id))

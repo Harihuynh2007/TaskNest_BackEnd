@@ -20,8 +20,10 @@ class Board(models.Model):
     User,
     related_name='boards',
     through='BoardMembership',
-    blank=True
-)
+    blank=True    
+    )
+
+    is_closed = models.BooleanField(default=False)
 
 
 class List(models.Model):
