@@ -3,13 +3,12 @@ from rest_framework.exceptions import PermissionDenied
 from django.db.models import Q
 from .models import Board, BoardMembership
 
-# ===================================================================
-# HÀM HELPER - Lấy vai trò của user trên một board cụ thể
-# ===================================================================
 def get_user_role_on_board(board, user):
     """
-    Trả về role code ('owner', 'admin', 'editor', 'viewer') hoặc None.
+    Trả về vai trò của người dùng trên board: 'owner', 'admin', 'editor', 'viewer', hoặc None.
     """
+    if not user.is_authenticated:
+        return None
     if board.created_by == user:
         return 'owner'
     try:
@@ -18,14 +17,10 @@ def get_user_role_on_board(board, user):
     except BoardMembership.DoesNotExist:
         return None
 
-# ===================================================================
-# CÁC HÀM KIỂM TRA QUYỀN
-# ===================================================================
-
 def check_board_view_permission(board, user):
     """
-    KIỂM TRA QUYỀN XEM (Observer trở lên)
-    User có thể xem nếu họ là owner, admin, editor, hoặc viewer.
+    KIỂM TRA QUYỀN XEM (Viewer/Observer trở lên).
+    User có thể xem nếu họ là thành viên (bất kể vai trò) hoặc người tạo.
     """
     role = get_user_role_on_board(board, user)
     if role in ['owner', 'admin', 'editor', 'viewer']:
@@ -34,30 +29,42 @@ def check_board_view_permission(board, user):
 
 def check_card_edit_permission(card, user):
     """
-    KIỂM TRA QUYỀN SỬA CARD (Member/Editor trở lên)
-    User có thể sửa card nếu họ là owner, admin, hoặc editor.
+    KIỂM TRA QUYỀN SỬA CARD (Editor/Member trở lên).
+    User có thể sửa card (kéo thả, đổi tên, etc.) nếu họ là owner, admin, hoặc editor.
     """
-    # Cho card trong Inbox
+    # Xử lý cho card trong Inbox
     if not card.list:
-         # Logic cũ đã tốt: kiểm tra board chung
         card_creator = card.created_by
-        if card_creator == user: return
+        if card_creator == user:
+            return
+        # Kiểm tra xem người dùng hiện tại và người tạo card có chung ít nhất một board không
         user_boards = set(Board.objects.filter(Q(created_by=user) | Q(members=user)).values_list('id', flat=True))
         creator_boards = set(Board.objects.filter(Q(created_by=card_creator) | Q(members=card_creator)).values_list('id', flat=True))
-        if user_boards.intersection(creator_boards): return
+        if user_boards.intersection(creator_boards):
+            return
         raise PermissionDenied("You don't have permission to modify this inbox card.")
     
-    # Cho card trong list
+    # Xử lý cho card nằm trong một list
     role = get_user_role_on_board(card.list.board, user)
     if role in ['owner', 'admin', 'editor']:
         return
-    raise PermissionDenied("You must be an editor, admin, or owner to modify cards.")
+    raise PermissionDenied("You must be an editor, admin, or owner to modify cards on this board.")
+
+def check_board_edit_permission(board, user):
+    """
+    KIỂM TRA QUYỀN SỬA BOARD (Editor/Member trở lên).
+    User có thể sửa các thành phần của board (tạo list/card) nếu là owner, admin, hoặc editor.
+    """
+    role = get_user_role_on_board(board, user)
+    if role in ['owner', 'admin', 'editor']:
+        return
+    raise PermissionDenied("You must be an editor, admin, or owner to modify this board.")
 
 
 def check_board_admin_permission(board, user):
     """
-    KIỂM TRA QUYỀN QUẢN TRỊ BOARD (Admin trở lên)
-    Dùng cho các hành động như mời thành viên, đổi tên board, xóa cột...
+    KIỂM TRA QUYỀN QUẢN TRỊ BOARD (Admin trở lên).
+    Dùng cho các hành động nguy hiểm: mời thành viên, xóa cột, đóng board...
     User có quyền nếu họ là owner hoặc admin.
     """
     role = get_user_role_on_board(board, user)
