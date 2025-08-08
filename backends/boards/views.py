@@ -27,7 +27,7 @@ class BoardListCreateView(APIView):
         except Workspace.DoesNotExist:
             return Response({'error': 'Workspace not found'}, status=404)
 
-        boards = Board.objects.filter(workspace=workspace, is_closed=False)
+        boards = Board.objects.filter(Q(workspace=workspace) | Q(memberships__user=request.user), is_closed=False)
         serializer = BoardSerializer(boards, many=True)
         return Response(serializer.data)
 

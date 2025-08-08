@@ -61,8 +61,8 @@ class Label(models.Model):
     board = models.ForeignKey(Board, on_delete=models.CASCADE, related_name='labels')
 
 class BoardMembership(models.Model):
-    board = models.ForeignKey(Board, on_delete=models.CASCADE)
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    board = models.ForeignKey(Board, on_delete=models.CASCADE, related_name='memberships')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='board_memberships')
     role = models.CharField(
         max_length=10,
         choices=[('editor', 'Editor'), ('viewer', 'Viewer')],
