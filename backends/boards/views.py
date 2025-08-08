@@ -127,8 +127,29 @@ class InboxCardCreateView(APIView):
     permission_classes = [IsAuthenticated]
     
     def get(self, request):
-        cards = Card.objects.filter(list__isnull=True, created_by=request.user).order_by('position')
-        serializer = CardSerializer(cards, many=True)
+        # 1. Tìm tất cả các board mà user hiện tại là thành viên hoặc là owner
+        user_accessible_boards = Board.objects.filter(
+            Q(created_by=request.user) | Q(members=request.user)
+        ).distinct()
+
+        #2. Tìm tất cả các card không có list (list__isnull=True)
+        # VÀ được tạo bởi một người nào đó trong các board mà user này có quyền truy cập.
+        # Điều này ngăn inbox của user A hiển thị card rác từ board Z mà họ không liên quan.
+        
+        # Lấy tất cả các thành viên (bao gồm cả owner) của các board này
+        all_board_members_ids = set()
+        for board in user_accessible_boards:
+            all_board_members_ids.add(board.created_by_id)
+            for member in board.members.all():
+                all_board_members_ids.add(member.id)
+
+        # 3. Lấy card không có list và được tạo bởi bất kỳ ai trong nhóm thành viên đó.
+        inbox_cards = Card.objects.filter(
+            list__isnull=True, 
+            created_by_id__in=all_board_members_ids
+        ).order_by('position')
+        
+        serializer = CardSerializer(inbox_cards, many=True)
         return Response(serializer.data)
     
     def post(self, request):
