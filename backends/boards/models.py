@@ -65,7 +65,7 @@ class BoardMembership(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='board_memberships')
     role = models.CharField(
         max_length=10,
-        choices=[('editor', 'Editor'), ('viewer', 'Viewer')],
+        choices=[('admin', 'Admin'), ('editor', 'Editor'), ('viewer', 'Viewer')],
         default='viewer'
     )
     joined_at = models.DateTimeField(auto_now_add=True)
