@@ -43,14 +43,14 @@ class Card(models.Model):
     description = models.TextField(blank=True)
     due_date = models.DateTimeField(null=True, blank=True)
     completed = models.BooleanField(default=False)
-    list = models.ForeignKey(List, on_delete=models.CASCADE, null=True, blank=True)  # ✅ rename từ listid → list
+    list = models.ForeignKey(List, on_delete=models.SET_NULL, null=True, blank=True)  # ✅ rename từ listid → list
     STATUS_CHOICES = [
         ('doing', 'Doing'),
         ('done', 'Done'),
     ]
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='doing')
     created_at = models.DateTimeField(auto_now_add=True)
-    created_by = models.ForeignKey(User, on_delete=models.CASCADE, null=True)
+    created_by = models.ForeignKey(User, on_delete=models.CASCADE, null=False)
     position = models.IntegerField(default=0)
     labels = models.ManyToManyField("Label", blank=True, related_name='cards')
 

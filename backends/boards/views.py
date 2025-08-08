@@ -117,7 +117,7 @@ class CardListCreateView(APIView):
 
         serializer = CardSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save(list=list_obj)
+            serializer.save(list=list_obj, created_by=request.user)
             return Response(serializer.data, status=201)
         
         print("❌ Validation errors:", serializer.errors)

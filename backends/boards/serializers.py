@@ -57,7 +57,12 @@ class CardSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             'list': {'required': False, 'allow_null': True}
         }
-        
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            validated_data['created_by'] = request.user
+        return super().create(validated_data)
+
 class LabelSerializer(serializers.ModelSerializer):
     class Meta:
         model = Label
