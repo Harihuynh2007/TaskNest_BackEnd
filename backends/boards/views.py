@@ -245,9 +245,7 @@ class BoardMembersView(APIView):
         if BoardMembership.objects.filter(board=board, user=user_to_invite).exists() or board.created_by == user_to_invite:
             return Response({'message': 'User is already a member.'}, status=400)
         membership = BoardMembership.objects.create(board=board, user=user_to_invite, role=role)
-        
         print(f"[INVITE] Invited {user_to_invite.email} as {role}")
-
         serializer = BoardMembershipSerializer(membership)
         return Response(serializer.data, status=201)
 
