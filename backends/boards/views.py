@@ -414,9 +414,19 @@ class BoardShareLinkView(APIView):
         # lấy link đang hoạt động (nếu có)
         invite = BoardInviteLink.objects.filter(board_id=board_id, is_active=True).first()
         if not invite:
-            return Response({'detail': 'No active invite link'}, status=404)
+            return Response({
+                "has_active": False,
+                "invite_link": None,
+                "expires_at": None
+            }, status=status.HTTP_200_OK)
+
         serializer = BoardInviteLinkSerializer(invite)
-        return Response(serializer.data)
+        return Response({
+            "has_active": True,
+            "invite_link": serializer.data.get("url"),      # hoặc field token/url tuỳ model
+            "expires_at": serializer.data.get("expires_at")
+        })
+        
 
     @require_board_admin(lambda self, request, board_id: Board.objects.get(id=board_id))
     def post(self, request, board_id):
