@@ -152,11 +152,13 @@ class CardListCreateView(APIView):
 
 class CardDetailView(APIView):
     permission_classes = [IsAuthenticated]
+
     @require_card_editor(lambda s, r, **k: Card.objects.get(id=k['card_id']))
     def patch(self, request, card_id):
         card = Card.objects.get(id=card_id)
         serializer = CardSerializer(card, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+        
         serializer.save()
         return Response(serializer.data)
     
