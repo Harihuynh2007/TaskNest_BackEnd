@@ -16,6 +16,8 @@ from .views import (
     ClosedBoardsListView,
     BoardShareLinkView,
     BoardJoinByLinkView,
+    CardCommentsView,
+    CommentDetailView
 
 )
 
@@ -49,5 +51,8 @@ urlpatterns = [
 
     path('boards/<int:board_id>/share-link/', BoardShareLinkView.as_view(), name='board-share-link'),
     path('boards/join/<uuid:token>/', BoardJoinByLinkView.as_view(), name='board-join-by-link'),
+
+    path('cards/<int:card_id>/comments/', CardCommentsView.as_view()),
+    path('comments/<int:comment_id>/', CommentDetailView.as_view()),
 
 ]

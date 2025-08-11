@@ -1,6 +1,6 @@
 # backends/boards/serializers.py
 from rest_framework import serializers
-from .models import Board, Workspace, List, Card, Label, BoardMembership,BoardInviteLink
+from .models import Board, Workspace, List, Card, Label, BoardMembership,BoardInviteLink,Comment
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
@@ -90,3 +90,24 @@ class BoardInviteLinkSerializer(serializers.ModelSerializer):
         model = BoardInviteLink
         fields = ['token', 'role', 'created_at', 'expires_at', 'is_active']
         read_only_fields = ['token', 'created_at']
+
+
+
+class UserPublicSerializer(serializers.ModelSerializer):
+    name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'name']  
+
+    def get_name(self, obj):
+        full = (getattr(obj, "get_full_name", lambda: "")() or "").strip()
+        return full or obj.username
+
+class CommentSerializer(serializers.ModelSerializer):
+    author = UserPublicSerializer(read_only=True)
+
+    class Meta:
+        model = Comment
+        fields = ['id', 'card', 'author', 'content', 'created_at', 'updated_at']
+        read_only_fields = ['author', 'created_at', 'updated_at']

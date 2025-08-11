@@ -6,13 +6,13 @@ from rest_framework import status
 from django.contrib.auth import get_user_model
 from django.db.models import Q
 
-from .models import Board, Workspace, List, Card, Label, BoardMembership, BoardInviteLink
+from .models import Board, Workspace, List, Card, Label, BoardMembership, BoardInviteLink,Comment
 from .serializers import (
     BoardSerializer, WorkspaceSerializer, ListSerializer, CardSerializer, LabelSerializer,
-    UserShortSerializer, BoardMembershipSerializer, BoardInviteLinkSerializer
+    UserShortSerializer, BoardMembershipSerializer, BoardInviteLinkSerializer,CommentSerializer
 )
 from .decorators import require_board_admin, require_board_editor, require_card_editor, require_board_viewer
-from .permissions import check_board_admin_permission # Import hàm permission mới
+from .permissions import check_board_admin_permission,check_card_edit_permission, check_board_view_permission # Import hàm permission mới
 
 User = get_user_model()
 
@@ -465,3 +465,62 @@ class BoardJoinByLinkView(APIView):
         membership_role = 'editor' if invite.role == 'member' else 'viewer'
         BoardMembership.objects.create(board=board, user=user, role=membership_role)
         return Response({'detail': 'Joined board successfully'})
+
+
+class CardCommentsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, card_id):
+        card = Card.objects.select_related('list__board', 'created_by').get(id=card_id)
+        # Quyền xem: nếu có list => dùng quyền xem board; nếu inbox => tác giả hoặc cùng board
+        if card.list:
+            check_board_view_permission(card.list.board, request.user)
+        else:
+            if card.created_by != request.user:
+                # người dùng phải có ít nhất 1 board chung với tác giả
+                from django.db.models import Q
+                has_common = Board.objects.filter(
+                    Q(created_by=request.user) | Q(members=request.user)
+                ).filter(
+                    Q(created_by=card.created_by) | Q(members=card.created_by)
+                ).exists()
+                if not has_common:
+                    return Response({'detail': 'Forbidden'}, status=403)
+
+        qs = Comment.objects.filter(card=card).order_by('-created_at')
+        return Response(CommentSerializer(qs, many=True).data)
+
+    def post(self, request, card_id):
+        card = Card.objects.select_related('list__board').get(id=card_id)
+        # Quyền tạo: dùng quyền sửa card (editor trở lên hoặc quy tắc inbox)
+        check_card_edit_permission(card, request.user)
+
+        ser = CommentSerializer(data={'content': request.data.get('content', ''), 'card': card.id})
+        ser.is_valid(raise_exception=True)
+        comment = Comment.objects.create(
+            card=card,
+            author=request.user,
+            content=ser.validated_data['content']
+        )
+        return Response(CommentSerializer(comment).data, status=201)
+
+class CommentDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, comment_id):
+        cmt = Comment.objects.select_related('card__list__board').get(id=comment_id)
+        # Cho sửa nếu là tác giả; hoặc có quyền editor trên board của card
+        if cmt.author != request.user:
+            check_card_edit_permission(cmt.card, request.user)
+
+        ser = CommentSerializer(cmt, data={'content': request.data.get('content', '')}, partial=True)
+        ser.is_valid(raise_exception=True)
+        ser.save()
+        return Response(ser.data)
+
+    def delete(self, request, comment_id):
+        cmt = Comment.objects.select_related('card__list__board').get(id=comment_id)
+        if cmt.author != request.user:
+            check_card_edit_permission(cmt.card, request.user)
+        cmt.delete()
+        return Response(status=204)
