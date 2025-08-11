@@ -2,6 +2,7 @@
 from rest_framework import serializers
 from .models import Board, Workspace, List, Card, Label, BoardMembership,BoardInviteLink,Comment
 from django.contrib.auth import get_user_model
+import hashlib
 
 User = get_user_model()
 
@@ -73,10 +74,31 @@ class LabelSerializer(serializers.ModelSerializer):
 # ===================================================================
 
 class UserShortSerializer(serializers.ModelSerializer):
+    name = serializers.SerializerMethodField()
+    avatar = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ['id', 'username', 'email']
+        fields = ['id', 'username', 'email', 'name', 'avatar']
 
+    def get_name(self, obj):
+        full = getattr(obj, "get_full_name", lambda: "")() or ""
+        return full.strip() or obj.username
+    
+    def get_avatar(self, obj):
+        # Nếu có field avatar trên model:
+        if hasattr(obj, "avatar") and obj.avatar:
+            try:
+                return obj.avatar.url  # ImageField/FileField
+            except Exception:
+                return str(obj.avatar)
+        # Fallback Gravatar theo email (tuỳ chọn)
+        if obj.email:
+            h = hashlib.md5(obj.email.lower().encode()).hexdigest()
+            return f"https://www.gravatar.com/avatar/{h}?d=identicon"
+        return None
+    
+    
 class BoardMembershipSerializer(serializers.ModelSerializer):
     user = UserShortSerializer(read_only=True)
 
