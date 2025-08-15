@@ -6,7 +6,6 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.tokens import RefreshToken
 import requests
-from boards.models import Workspace
 from django.core.files.base import ContentFile
 import traceback
 from django.db.models import Q
@@ -54,9 +53,6 @@ class LoginView(APIView):
         login(request, user) # Cần cho Django Admin và các tính năng session-based khác
         tokens = get_tokens_for_user(user)
 
-        # Logic kiểm tra workspace cho user cũ có thể vẫn giữ lại nếu cần
-        if not Workspace.objects.filter(owner=user).exists():
-            Workspace.objects.create(name="Hard Spirit", owner=user)
 
         return Response({
             "ok": True,

@@ -1,6 +1,6 @@
 # backends/boards/serializers.py
 from rest_framework import serializers
-from .models import Board, Workspace, List, Card, Label, BoardMembership,BoardInviteLink,Comment
+from .models import Board, List, Card, Label, BoardMembership,BoardInviteLink,Comment
 from django.contrib.auth import get_user_model
 import hashlib
 
@@ -10,35 +10,19 @@ User = get_user_model()
 # Serializers chính cho các model
 # ===================================================================
 
-# Serializer nhỏ này chỉ để lồng thông tin workspace vào các serializer khác
-class WorkspaceShortSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Workspace
-        fields = ['id', 'name']
 
-
-# Serializer đầy đủ cho Workspace (dùng cho API lấy list workspace)
-class WorkspaceSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Workspace
-        fields = ['id', 'name']
 
 
 class BoardSerializer(serializers.ModelSerializer):
-    # ✅ SỬA Ở ĐÂY: Lồng thông tin workspace vào BoardSerializer
-    # Thay vì chỉ trả về ID, nó sẽ trả về một object { id, name }
-    workspace = WorkspaceShortSerializer(read_only=True)
+
     
     class Meta:
         model = Board
         # Vẫn trả về 'workspace' ID khi ghi (create/update)
         # Nhưng khi đọc (get), nó sẽ sử dụng serializer lồng ở trên
-        fields = ['id', 'name', 'workspace', 'created_by', 'background', 'visibility', 'is_closed']
+        fields = ['id', 'name', 'created_by', 'background', 'visibility', 'is_closed']
         read_only_fields = ['created_by']
-        # Để cho phép tạo board chỉ bằng cách gửi `workspace` ID
-        extra_kwargs = {
-            'workspace': {'write_only': True}
-        }
+
 
 
 class ListSerializer(serializers.ModelSerializer):

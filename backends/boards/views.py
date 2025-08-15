@@ -6,9 +6,9 @@ from rest_framework import status
 from django.contrib.auth import get_user_model
 from django.db.models import Q
 
-from .models import Board, Workspace, List, Card, Label, BoardMembership, BoardInviteLink,Comment
+from .models import Board, List, Card, Label, BoardMembership, BoardInviteLink,Comment
 from .serializers import (
-    BoardSerializer, WorkspaceSerializer, ListSerializer, CardSerializer, LabelSerializer,
+    BoardSerializer, ListSerializer, CardSerializer, LabelSerializer,
     UserShortSerializer, BoardMembershipSerializer, BoardInviteLinkSerializer,CommentSerializer
 )
 from .decorators import require_board_admin, require_board_editor, require_card_editor, require_board_viewer
@@ -21,43 +21,26 @@ User = get_user_model()
 # Views cho Workspace và Board chính
 # ===================================================================
 
-class WorkspaceListCreateView(APIView):
-    permission_classes = [IsAuthenticated]
 
-    def get(self, request):
-        workspaces = Workspace.objects.filter(Q(owner=request.user) | Q(board__members=request.user)).distinct()
-        serializer = WorkspaceSerializer(workspaces, many=True)
-        return Response(serializer.data)
-
-    def post(self, request):
-        serializer = WorkspaceSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        serializer.save(owner=request.user)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 class BoardListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, workspace_id):
+    def get(self, request):
         boards = Board.objects.filter(
-            workspace_id=workspace_id, is_closed=False
+           is_closed=False
         ).filter(
             Q(created_by=request.user) | Q(members=request.user)
         ).distinct()
         serializer = BoardSerializer(boards, many=True, context={'request': request})
         return Response(serializer.data)
 
-    def post(self, request, workspace_id):
-        try:
-            workspace = Workspace.objects.get(id=workspace_id, owner=request.user)
-        except Workspace.DoesNotExist:
-            return Response({'error': 'You do not have permission to create a board in this workspace.'}, status=status.HTTP_403_FORBIDDEN)
+    def post(self, request,):
 
         serializer = BoardSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
-        board = serializer.save(workspace=workspace, created_by=request.user)
-        
+        board = serializer.save(created_by=request.user)
         DEFAULT_LABEL_COLORS = ['#61bd4f', '#f2d600', '#ff9f1a', '#eb5a46', '#c377e0', '#0079bf']
         for color in DEFAULT_LABEL_COLORS:
             Label.objects.create(name='', color=color, board=board)
@@ -68,22 +51,22 @@ class BoardDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     @require_board_viewer(lambda s, r, **k: Board.objects.get(id=k['board_id']))
-    def get(self, request, workspace_id, board_id):
-        board = Board.objects.get(id=board_id, workspace_id=workspace_id)
+    def get(self, request, board_id):
+        board = Board.objects.get(id=board_id)
         serializer = BoardSerializer(board, context={'request': request})
         return Response(serializer.data)
 
     @require_board_admin(lambda s, r, **k: Board.objects.get(id=k['board_id']))
-    def patch(self, request, workspace_id, board_id):
-        board = Board.objects.get(id=board_id, workspace_id=workspace_id)
+    def patch(self, request, board_id):
+        board = Board.objects.get(id=board_id)
         if 'is_closed' in request.data:
             board.is_closed = request.data['is_closed']
             board.save(update_fields=['is_closed'])
         serializer = BoardSerializer(board, context={'request': request})
         return Response(serializer.data)
         
-    def delete(self, request, workspace_id, board_id):
-        board = Board.objects.get(id=board_id, workspace_id=workspace_id)
+    def delete(self, request, board_id):
+        board = Board.objects.get(id=board_id)
         if board.created_by != request.user:
             return Response({'error': 'Only the board creator can permanently delete the board.'}, status=status.HTTP_403_FORBIDDEN)
         board.delete()
@@ -95,7 +78,7 @@ class ClosedBoardsListView(APIView):
         user_boards = Board.objects.filter(
             Q(created_by=request.user) | Q(members=request.user),
             is_closed=True
-        ).distinct().prefetch_related('workspace')
+        )
         serializer = BoardSerializer(user_boards, many=True, context={'request': request})
         return Response(serializer.data)
     
