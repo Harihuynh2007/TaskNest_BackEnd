@@ -139,6 +139,5 @@ class GoogleLoginSerializer(serializers.Serializer):
     """
     token = serializers.CharField(write_only=True, required=True)
 
-# ----------------- 5. Serializer cho chức năng INVITE -----------------
 
 
