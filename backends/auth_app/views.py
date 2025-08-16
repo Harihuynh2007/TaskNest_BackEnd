@@ -108,7 +108,7 @@ class GoogleLoginView(APIView):
                 user = User.objects.create_user(username=email, email=email)
                 created = True # User vừa được tạo
 
-            # Signal 'post_save' sẽ tự động tạo Profile và Workspace nếu user được tạo mới
+            # Signal 'post_save' sẽ tự động tạo Profile nếu user được tạo mới
             profile = user.profile
 
             login(request, user)

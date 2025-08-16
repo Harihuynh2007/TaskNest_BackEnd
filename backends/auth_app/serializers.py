@@ -88,7 +88,7 @@ class RegisterSerializer(serializers.ModelSerializer):
             email=validated_data['email'],
             password=validated_data['password']
         )
-        # Signal 'post_save' sẽ tự động tạo Profile và Workspace cho user này.
+        # Signal 'post_save' sẽ tự động tạo Profile cho user này.
         return user
 
 

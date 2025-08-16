@@ -30,7 +30,7 @@ class List(models.Model):
     background = models.TextField(blank=True)
     visibility = models.CharField(max_length=20, default='private')
     created_at = models.DateTimeField(auto_now_add=True)
-    board = models.ForeignKey(Board, on_delete=models.CASCADE)  # ✅ rename từ boardid → board
+    board = models.ForeignKey(Board, on_delete=models.CASCADE)  
 
 class Card(models.Model):
     name = models.CharField(max_length=255)
@@ -39,7 +39,7 @@ class Card(models.Model):
     description = models.TextField(blank=True)
     due_date = models.DateTimeField(null=True, blank=True)
     completed = models.BooleanField(default=False)
-    list = models.ForeignKey(List, on_delete=models.SET_NULL, null=True, blank=True)  # ✅ rename từ listid → list
+    list = models.ForeignKey(List, on_delete=models.SET_NULL, null=True, blank=True)  
     STATUS_CHOICES = [
         ('doing', 'Doing'),
         ('done', 'Done'),

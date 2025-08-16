@@ -18,8 +18,6 @@ class BoardSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Board
-        # Vẫn trả về 'workspace' ID khi ghi (create/update)
-        # Nhưng khi đọc (get), nó sẽ sử dụng serializer lồng ở trên
         fields = ['id', 'name', 'created_by', 'background', 'visibility', 'is_closed']
         read_only_fields = ['created_by']
 
