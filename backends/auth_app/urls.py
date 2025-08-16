@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import RegisterView, LoginView, LogoutView, MeView, GoogleLoginView,UserSearchView   
+from .views import RegisterView, LoginView, LogoutView, MeView, GoogleLoginView,UserSearchView, MeProfileView
 
 urlpatterns = [
     path('register/', RegisterView.as_view()),
@@ -7,5 +7,6 @@ urlpatterns = [
     path('logout/', LogoutView.as_view()),
     path('me/', MeView.as_view()),
     path('google-login/', GoogleLoginView.as_view()),  
-    path('users/search/', UserSearchView.as_view(), name='user-search')
+    path('users/search/', UserSearchView.as_view(), name='user-search'), 
+    path("me/profile/", MeProfileView.as_view(), name="me-profile"),
 ]

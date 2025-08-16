@@ -1,7 +1,7 @@
 
 from rest_framework import serializers
 from django.contrib.auth import get_user_model, authenticate
-
+from .models import Profile
 User = get_user_model()
 
 # ----------------- 1. Serializer để HIỂN THỊ thông tin User -----------------
@@ -52,6 +52,12 @@ class UserSerializer(serializers.ModelSerializer):
         return user.email.split('@')[0]
 
 
+class ProfileSerializer(serializers.ModelSerializer):
+    avatar = serializers.ImageField(required=False, allow_null=True)
+
+    class Meta:
+        model = Profile
+        fields = ["display_name", "bio", "avatar", "is_public", "show_public_boards"]
 # ----------------- 2. Serializer cho chức năng ĐĂNG KÝ -----------------
 class RegisterSerializer(serializers.ModelSerializer):
     """

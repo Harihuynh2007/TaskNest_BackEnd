@@ -17,6 +17,7 @@ class Profile(models.Model):
         blank=True,
         null=True
     )
-
+    display_name = models.CharField(max_length=50, blank=True)  # tên hiển thị
+    bio = models.TextField(blank=True, default="")
     def __str__(self):
-        return f'Profile of {self.user.username}'
+        return f"Profile<{self.user_id}:{self.display_name or self.user}>"

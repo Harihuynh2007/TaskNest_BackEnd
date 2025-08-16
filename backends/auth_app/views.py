@@ -16,6 +16,7 @@ from .serializers import (
     LoginSerializer,
     UserSerializer,
     GoogleLoginSerializer,
+    ProfileSerializer,
 )
 
 User = get_user_model()
@@ -165,3 +166,16 @@ class UserSearchView(APIView):
         return Response(serializer.data)        
     
 
+class MeProfileView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        profile = request.user.profile
+        return Response(ProfileSerializer(profile, context={"request": request}).data)
+
+    def patch(self, request):
+        profile = request.user.profile
+        serializer = ProfileSerializer(profile, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
