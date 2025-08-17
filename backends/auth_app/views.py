@@ -1,3 +1,4 @@
+# auth_app/views.py - Updated MeProfileView
 from django.contrib.auth import authenticate, login, logout, get_user_model
 from rest_framework import status
 from rest_framework.views import APIView
@@ -11,12 +12,15 @@ from django.core.files.base import ContentFile
 import traceback
 from django.db.models import Q
 
+from .models import Profile
+
 from .serializers import (
     RegisterSerializer,
     LoginSerializer,
     UserSerializer,
     GoogleLoginSerializer,
     ProfileSerializer,
+    UserAvatarSerializer,
 )
 
 User = get_user_model()
@@ -28,18 +32,70 @@ def get_tokens_for_user(user):
         'access': str(refresh.access_token),
     }
 
+# ... Giữ nguyên các views khác ...
+
+class MeProfileView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        profile = request.user.profile
+        return Response(ProfileSerializer(profile, context={"request": request}).data)
+
+    def patch(self, request):
+        profile = request.user.profile
+        
+        try:
+            # Handle FormData from frontend
+            data = request.data.copy()
+            
+            # Clean up FormData values - frontend có thể gửi string thay vì boolean
+            boolean_fields = ['is_discoverable', 'show_boards_on_profile']
+            for field in boolean_fields:
+                if field in data:
+                    value = data[field]
+                    if isinstance(value, str):
+                        # Convert string to boolean
+                        data[field] = value.lower() in ('true', '1', 'on', 'yes')
+                    elif value is None:
+                        data[field] = False
+            
+            # Clean up text fields
+            text_fields = ['display_name', 'bio']
+            for field in text_fields:
+                if field in data and data[field] is None:
+                    data[field] = ""
+            
+            # Debug log (remove in production)
+            print(f"Received data: {dict(data)}")
+            
+            serializer = ProfileSerializer(profile, data=data, partial=True, context={"request": request})
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            
+            # Return updated data
+            return Response(ProfileSerializer(profile, context={"request": request}).data)
+            
+        except Exception as e:
+            print(f"Profile update error: {e}")
+            traceback.print_exc()
+            return Response(
+                {"error": f"Profile update failed: {str(e)}"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+# Các views khác giữ nguyên...
 class RegisterView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True) # Tự động trả về lỗi 400 nếu dữ liệu không hợp lệ
+        serializer.is_valid(raise_exception=True)
         user = serializer.save() 
 
         tokens = get_tokens_for_user(user)
         return Response({
             "ok": True,
-            "user": UserSerializer(user).data, # Dùng UserSerializer để hiển thị thông tin
+            "user": UserSerializer(user, context={"request": request}).data,
             "token": tokens["access"],
             "refresh": tokens["refresh"]
         }, status=status.HTTP_201_CREATED)
@@ -50,25 +106,24 @@ class LoginView(APIView):
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = serializer.validated_data['user'] # Lấy user đã được xác thực từ serializer
+        user = serializer.validated_data['user']
 
-        login(request, user) # Cần cho Django Admin và các tính năng session-based khác
+        login(request, user)
         tokens = get_tokens_for_user(user)
 
-        # Logic kiểm tra workspace cho user cũ có thể vẫn giữ lại nếu cần
         if not Workspace.objects.filter(owner=user).exists():
             Workspace.objects.create(name="Hard Spirit", owner=user)
 
         return Response({
             "ok": True,
-            "user": UserSerializer(user).data, 
+            "user": UserSerializer(user, context={"request": request}).data, 
             "token": tokens["access"],
             "refresh": tokens["refresh"]
         })
 
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
-    authentication_classes = [JWTAuthentication] # Thêm dòng này để chắc chắn nó xác thực bằng JWT
+    authentication_classes = [JWTAuthentication]
 
     def post(self, request):
         logout(request)
@@ -79,7 +134,6 @@ class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        # Chỉ cần truyền user và context có request vào UserSerializer
         serializer = UserSerializer(request.user, context={'request': request})
         return Response(serializer.data)
 
@@ -92,35 +146,28 @@ class GoogleLoginView(APIView):
         token = input_serializer.validated_data['token']
 
         try:
-            # 1. Xác minh với Google
             verify_url = f"https://www.googleapis.com/oauth2/v3/tokeninfo?id_token={token}"
             google_res = requests.get(verify_url)
-            google_res.raise_for_status() # Tự động báo lỗi nếu status code không phải 2xx
+            google_res.raise_for_status()
 
             data = google_res.json()
             email = data.get('email')
 
-            # (1) Kiểm tra email ngay từ đầu
             if not email:
                 return Response({'error': 'No email in token'}, status=status.HTTP_400_BAD_REQUEST)
 
-            # (2) Lấy hoặc tạo user DỰA TRÊN EMAIL và xóa bỏ logic thừa
             try:
                 user = User.objects.get(email=email)
-                created = False # User đã tồn tại
+                created = False
             except User.DoesNotExist:
-                # Dùng email làm username mặc định
                 user = User.objects.create_user(username=email, email=email)
-                created = True # User vừa được tạo
+                created = True
 
-            # Signal 'post_save' sẽ tự động tạo Profile và Workspace nếu user được tạo mới
-            profile = user.profile
+            profile, _ = Profile.objects.get_or_create(user=user)
 
             login(request, user)
             tokens = get_tokens_for_user(user)
 
-            # (3) Xử lý avatar một cách thông minh hơn
-            # Chỉ tải avatar nếu là user mới hoặc user chưa có avatar
             picture = data.get('picture')
             if picture and (created or not profile.avatar):
                 try:
@@ -133,7 +180,6 @@ class GoogleLoginView(APIView):
 
             user_data = UserSerializer(user, context={'request': request}).data
             
-            # (4) Trả về response gọn gàng
             return Response({
                 'ok': True,
                 'user': user_data,
@@ -154,28 +200,13 @@ class UserSearchView(APIView):
 
     def get(self, request):
         query = request.query_params.get('q', '')
-        if len(query) < 2: # Chỉ tìm kiếm khi có ít nhất 2 ký tự
+        if len(query) < 2:
             return Response([], status=status.HTTP_200_OK)
 
         users = User.objects.filter(
             Q(username__icontains=query) | Q(email__icontains=query)
-        )[:10] # Giới hạn kết quả trả về
+        )[:10]
 
-        # Dùng lại UserSerializer nhưng không cần context
-        serializer = UserSerializer(users, many=True)
-        return Response(serializer.data)        
-    
-
-class MeProfileView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        profile = request.user.profile
-        return Response(ProfileSerializer(profile, context={"request": request}).data)
-
-    def patch(self, request):
-        profile = request.user.profile
-        serializer = ProfileSerializer(profile, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
+        # Use UserAvatarSerializer for search results
+        serializer = UserAvatarSerializer([u.profile for u in users], many=True, context={'request': request})
         return Response(serializer.data)
