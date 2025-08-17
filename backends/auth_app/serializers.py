@@ -57,7 +57,7 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Profile
-        fields = ["display_name", "bio", "avatar", "is_public", "show_public_boards"]
+        fields = ["display_name", "bio", "avatar"]
 # ----------------- 2. Serializer cho chức năng ĐĂNG KÝ -----------------
 class RegisterSerializer(serializers.ModelSerializer):
     """
