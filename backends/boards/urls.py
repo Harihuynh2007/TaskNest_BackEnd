@@ -17,8 +17,11 @@ from .views import (
     BoardShareLinkView,
     BoardJoinByLinkView,
     CardCommentsView,
-    CommentDetailView
-
+    CommentDetailView,
+    CardMemberAddView,
+    CardMembersView,
+    CardMemberRemoveView,
+    
 )
 
 urlpatterns = [
@@ -54,5 +57,9 @@ urlpatterns = [
 
     path('cards/<int:card_id>/comments/', CardCommentsView.as_view()),
     path('comments/<int:comment_id>/', CommentDetailView.as_view()),
+
+    path('cards/<int:card_id>/members/', CardMembersView.as_view()),
+    path('cards/<int:card_id>/members/add/', CardMemberAddView.as_view()),
+    path('cards/<int:card_id>/members/remove/', CardMemberRemoveView.as_view()),
 
 ]
