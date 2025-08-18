@@ -26,19 +26,26 @@ class WorkspaceSerializer(serializers.ModelSerializer):
 
 class BoardSerializer(serializers.ModelSerializer):
     workspace = WorkspaceShortSerializer(read_only=True)
+    # Cho phép FE gửi workspace_id nếu muốn, nhưng không bắt buộc
     workspace_id = serializers.PrimaryKeyRelatedField(
-        source='workspace', queryset=Workspace.objects.all(), write_only=True
+        source='workspace',
+        queryset=Workspace.objects.all(),
+        write_only=True,
+        required=False
     )
     class Meta:
         model = Board
         # Vẫn trả về 'workspace' ID khi ghi (create/update)
         # Nhưng khi đọc (get), nó sẽ sử dụng serializer lồng ở trên
         fields = ['id', 'name', 'workspace', 'workspace_id', 'created_by', 'background', 'visibility', 'is_closed']
-        read_only_fields = ['created_by']
-        # Để cho phép tạo board chỉ bằng cách gửi `workspace` ID
-        extra_kwargs = {
-            'workspace': {'write_only': True}
-        }
+        read_only_fields = ['created_by', 'workspace']
+    def create(self, validated_data):
+        # ưu tiên workspace từ payload; nếu không có, lấy từ context (set ở view)
+        workspace = validated_data.get('workspace') or self.context.get('workspace')
+        if not workspace:
+            raise serializers.ValidationError({'workspace_id': 'This field is required.'})
+        user = self.context['request'].user
+        return Board.objects.create(created_by=user, workspace=workspace, **validated_data)
 
 
 class ListSerializer(serializers.ModelSerializer):

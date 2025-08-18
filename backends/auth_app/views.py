@@ -179,7 +179,8 @@ class GoogleLoginView(APIView):
                     print(f"Failed to fetch Google avatar for {email}: {e}")
 
             user_data = UserSerializer(user, context={'request': request}).data
-            
+            if not Workspace.objects.filter(owner=user).exists():
+                Workspace.objects.create(name="Hard Spirit", owner=user)
             return Response({
                 'ok': True,
                 'user': user_data,

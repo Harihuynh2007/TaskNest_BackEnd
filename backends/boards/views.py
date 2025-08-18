@@ -49,7 +49,7 @@ class BoardListCreateView(APIView):
 
     def get(self, request, workspace_id):
         boards = (Board.objects
-                .filter(workspace_id=workspace_id, is_closed=False)
+                .filter(is_closed=False)
                 .filter(Q(created_by=request.user) | Q(members=request.user))
                 .distinct()
                 .select_related('workspace'))  # ✅ thêm
@@ -58,20 +58,20 @@ class BoardListCreateView(APIView):
         return Response(serializer.data)
 
     def post(self, request, workspace_id):
+        DEFAULT_LABEL_COLORS = ['#61bd4f', '#f2d600', '#ff9f1a', '#eb5a46', '#c377e0', '#0079bf']
         try:
             workspace = Workspace.objects.get(id=workspace_id, owner=request.user)
         except Workspace.DoesNotExist:
             return Response({'error': 'You do not have permission to create a board in this workspace.'}, status=status.HTTP_403_FORBIDDEN)
 
-        serializer = BoardSerializer(data=request.data, context={'request': request})
-        serializer.is_valid(raise_exception=True)
-        board = serializer.save(workspace=workspace, created_by=request.user)
-        
-        DEFAULT_LABEL_COLORS = ['#61bd4f', '#f2d600', '#ff9f1a', '#eb5a46', '#c377e0', '#0079bf']
-        for color in DEFAULT_LABEL_COLORS:
-            Label.objects.create(name='', color=color, board=board)
+        serializer = BoardSerializer(data=request.data, context={'request': request, 'workspace': workspace})
+        if serializer.is_valid():
+            board = serializer.save()
+            for color in DEFAULT_LABEL_COLORS:
+                Label.objects.create(name='', color=color, board=board)
+            return Response(BoardSerializer(board, context={'request': request}).data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=400)
 
-        return Response(BoardSerializer(board, context={'request': request}).data, status=status.HTTP_201_CREATED)
 
 class BoardDetailView(APIView):
     permission_classes = [IsAuthenticated]
