@@ -6,13 +6,16 @@ from rest_framework import status
 from django.contrib.auth import get_user_model
 from django.db.models import Q
 
+from rest_framework import permissions
+
+
 from .models import Board, Workspace, List, Card, Label, BoardMembership, BoardInviteLink,Comment
 from .serializers import (
     BoardSerializer, WorkspaceSerializer, ListSerializer, CardSerializer, LabelSerializer,
     UserShortSerializer, BoardMembershipSerializer, BoardInviteLinkSerializer,CommentSerializer
 )
 from .decorators import require_board_admin, require_board_editor, require_card_editor, require_board_viewer
-from .permissions import check_board_admin_permission,check_card_edit_permission, check_board_view_permission # Import hàm permission mới
+from .permissions import check_board_admin_permission,check_card_edit_permission, check_board_view_permission, IsBoardMember # Import hàm permission mới
 
 User = get_user_model()
 
@@ -139,7 +142,8 @@ class CardListCreateView(APIView):
     permission_classes = [IsAuthenticated]
     @require_board_viewer(lambda s, r, **k: List.objects.get(id=k['list_id']).board)
     def get(self, request, list_id):
-        cards = Card.objects.filter(list_id=list_id).order_by('position')
+        # Tối ưu query ở đây
+        cards = Card.objects.filter(list_id=list_id).prefetch_related('members').order_by('position')
         serializer = CardSerializer(cards, many=True)
         return Response(serializer.data)
 
@@ -227,6 +231,7 @@ class CardBatchUpdateView(APIView):
 
 class BoardMembersView(APIView):
     permission_classes = [IsAuthenticated]
+
     @require_board_viewer(lambda s, r, **k: Board.objects.get(id=k['board_id']))
     def get(self, request, board_id):
         memberships = BoardMembership.objects.filter(board_id=board_id).select_related('user')
@@ -466,7 +471,80 @@ class BoardJoinByLinkView(APIView):
         BoardMembership.objects.create(board=board, user=user, role=membership_role)
         return Response({'detail': 'Joined board successfully'})
 
+class CardMembersView(APIView):
+    permission_classes = [IsAuthenticated]
 
+    def get(self, request, card_id):
+        card = Card.objects.select_related('list__board').get(id=card_id)
+        # Quyền xem: giống CardCommentsView
+        if card.list:
+            check_board_view_permission(card.list.board, request.user)
+        else:
+            # Inbox: cho tác giả hoặc người có board chung với tác giả (giữ nguyên triết lý hiện có)
+            if card.created_by != request.user:
+                has_common = Board.objects.filter(Q(created_by=request.user) | Q(members=request.user)) \
+                    .filter(Q(created_by=card.created_by) | Q(members=card.created_by)).exists()
+                if not has_common:
+                    return Response({'detail': 'Forbidden'}, status=403)
+
+        members_qs = card.members.all().order_by('first_name', 'username')
+        return Response(UserShortSerializer(members_qs, many=True).data)
+
+    
+    def patch(self, request, card_id):
+        """Gán lại toàn bộ members của card qua danh sách member_ids"""
+        card = Card.objects.select_related('list__board').get(id=card_id)
+        # Quyền sửa card
+        check_card_edit_permission(card, request.user)
+
+        # Không cho assign nếu là inbox-card (không thuộc board)
+        if not card.list:
+            return Response({'detail': 'Cannot assign members to inbox cards'}, status=400)
+
+        board = card.list.board
+        member_ids = request.data.get('member_ids', [])
+        # Chỉ cho phép những user thuộc BoardMembership của board
+        valid_ids = set(BoardMembership.objects.filter(board=board).values_list('user_id', flat=True))
+        invalid = [uid for uid in member_ids if uid not in valid_ids]
+        if invalid:
+            return Response({'detail': f'Users {invalid} are not board members'}, status=400)
+
+        card.members.set(member_ids)
+        members_qs = card.members.all().order_by('first_name', 'username')
+        return Response(UserShortSerializer(members_qs, many=True).data)
+    
+class CardMemberAddView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, card_id):
+        card = Card.objects.select_related('list__board').get(id=card_id)
+        check_card_edit_permission(card, request.user)
+        if not card.list:
+            return Response({'detail': 'Cannot assign members to inbox cards'}, status=400)
+
+        uid = request.data.get('user_id')
+        if uid is None:
+            return Response({'detail': 'user_id is required'}, status=400)
+
+        board = card.list.board
+        if not BoardMembership.objects.filter(board=board, user_id=uid).exists():
+            return Response({'detail': 'User is not a board member'}, status=400)
+
+        card.members.add(uid)
+
+class CardMemberRemoveView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, card_id):
+        card = Card.objects.select_related('list__board').get(id=card_id)
+        check_card_edit_permission(card, request.user)
+        uid = request.data.get('user_id')
+        if uid is None:
+            return Response({'detail': 'user_id is required'}, status=400)
+
+        card.members.remove(uid)
+        return Response(status=204)
+            
 class CardCommentsView(APIView):
     permission_classes = [IsAuthenticated]
 
