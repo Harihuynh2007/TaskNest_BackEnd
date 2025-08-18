@@ -1,5 +1,6 @@
 # backends/boards/permissions.py
 from rest_framework.exceptions import PermissionDenied
+from rest_framework import permissions
 from django.db.models import Q
 from .models import Board, BoardMembership
 
@@ -71,3 +72,9 @@ def check_board_admin_permission(board, user):
     if role in ['owner', 'admin']:
         return
     raise PermissionDenied("You must be an admin or the board creator to perform this action.")
+
+# boards/permissions.py
+class IsBoardMember(permissions.BasePermission):
+    def has_object_permission(self, request, view, obj):
+        board = getattr(obj, 'board', None) or obj.list.board
+        return board.members.filter(id=request.user.id).exists()

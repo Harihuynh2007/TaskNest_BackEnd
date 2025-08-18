@@ -46,13 +46,20 @@ class ListSerializer(serializers.ModelSerializer):
         model = List
         fields = ['id', 'name', 'background', 'board', 'visibility', 'position']
 
+class UserShortSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'first_name', 'last_name', 'avatar']
+        
 class CardSerializer(serializers.ModelSerializer):
+    members = UserShortSerializer(many=True, read_only=True)
+
     class Meta:
         model = Card
         fields = [
             'id', 'name', 'status', 'background', 'visibility', 'list', 
             'description', 'due_date', 'completed', 'position', 
-            'created_at','labels'
+            'created_at','labels', 'members'
         ]
         read_only_fields = ['created_by']
         extra_kwargs = {
@@ -63,7 +70,33 @@ class CardSerializer(serializers.ModelSerializer):
         if request and hasattr(request, 'user'):
             validated_data['created_by'] = request.user
         return super().create(validated_data)
+    
 
+
+class CardMemberSerializer(serializers.ModelSerializer):
+    members = UserShortSerializer(many=True, read_only=True)
+    member_ids = serializers.ListField(
+        child=serializers.IntegerField(), write_only=True, required=False
+    )
+    class Meta:
+        model = Card
+        fields = ['id', 'members', 'member_ids']
+
+    def validate_member_ids(self, ids):
+        card = self.instance
+        board = card.list.board  # hoặc card.board nếu bạn có FK trực tiếp
+        board_member_ids = set(board.members.values_list('id', flat=True))
+        invalid = [uid for uid in ids if uid not in board_member_ids]
+        if invalid:
+            raise serializers.ValidationError(f"Users {invalid} are not board members")
+        return ids
+
+    def update(self, instance, validated):
+        ids = validated.get('member_ids', None)
+        if ids is not None:
+            instance.members.set(ids)
+        return instance
+    
 class LabelSerializer(serializers.ModelSerializer):
     class Meta:
         model = Label
