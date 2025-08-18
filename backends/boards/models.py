@@ -53,7 +53,8 @@ class Card(models.Model):
     created_by = models.ForeignKey(User, on_delete=models.CASCADE, null=False)
     position = models.IntegerField(default=0)
     labels = models.ManyToManyField("Label", blank=True, related_name='cards')
-
+    members = models.ManyToManyField('auth.User', related_name='card_memberships', blank=True)
+    
 
 class Label(models.Model):
     name = models.CharField(max_length=100)
