@@ -8,9 +8,7 @@ from .views import (
     CardDetailView,
     ListDetailView,
     InboxCardCreateView,
-    BoardLabelsView,
     BoardMembersView,
-    LabelCreateView,
     LabelDetailView,
     CardBatchUpdateView,
     ClosedBoardsListView,
@@ -18,10 +16,11 @@ from .views import (
     BoardJoinByLinkView,
     CardCommentsView,
     CommentDetailView,
-    CardMemberAddView,
-    CardMembersView,
-    CardMemberRemoveView,
-    
+    BoardLabelListCreateView,
+    CardMembershipListCreateView,
+    CardMembershipDetailView,
+    CardWatchersView,
+    CardActivityView,
 )
 
 urlpatterns = [
@@ -41,11 +40,10 @@ urlpatterns = [
 
     path('cards/', InboxCardCreateView.as_view(), name='card-create-inbox'),
 
-    path('boards/<int:board_id>/labels/', BoardLabelsView.as_view()),
+    path('boards/<int:board_id>/labels/', BoardLabelListCreateView.as_view(), name='board-label-list-create'),
 
     path('boards/<int:board_id>/members/', BoardMembersView.as_view(), name='board_members'),
 
-    path('boards/<int:board_id>/labels/', LabelCreateView.as_view(), name='label-create'),
     path('labels/<int:label_id>/', LabelDetailView.as_view(), name='label-detail'),
 
     path('cards/batch-update/', CardBatchUpdateView.as_view(), name='card-batch-update'),
@@ -58,8 +56,22 @@ urlpatterns = [
     path('cards/<int:card_id>/comments/', CardCommentsView.as_view()),
     path('comments/<int:comment_id>/', CommentDetailView.as_view()),
 
-    path('cards/<int:card_id>/members/', CardMembersView.as_view()),
-    path('cards/<int:card_id>/members/add/', CardMemberAddView.as_view()),
-    path('cards/<int:card_id>/members/remove/', CardMemberRemoveView.as_view()),
 
+    # Enhanced card member management
+    path(
+        'cards/<int:card_id>/memberships/',
+        CardMembershipListCreateView.as_view(),
+        name='card-membership-list-create'
+    ),
+    path(
+        'cards/<int:card_id>/memberships/<int:user_id>/',
+        CardMembershipDetailView.as_view(),
+        name='card-membership-detail'
+    ),
+    
+    # Card watchers
+    path('cards/<int:card_id>/watchers/', CardWatchersView.as_view()),
+    
+    # Card activity
+    path('cards/<int:card_id>/activities/', CardActivityView.as_view()),
 ]

@@ -5,14 +5,19 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
 from django.contrib.auth import get_user_model
 from django.db.models import Q
+from django.shortcuts import get_object_or_404
+from django.db import transaction
 
 from rest_framework import permissions
 
 
 from .models import Board, Workspace, List, Card, Label, BoardMembership, BoardInviteLink,Comment
 from .serializers import (
-    BoardSerializer, WorkspaceSerializer, ListSerializer, CardSerializer, LabelSerializer,
-    UserShortSerializer, BoardMembershipSerializer, BoardInviteLinkSerializer,CommentSerializer
+    BoardSerializer, WorkspaceSerializer, ListSerializer, CardSerializer, 
+    LabelSerializer,
+    UserShortSerializer, BoardMembershipSerializer, BoardInviteLinkSerializer,
+    CommentSerializer,CardActivitySerializer,CardActivity,
+    CardMembership,CardMembershipSerializer
 )
 from .decorators import require_board_admin, require_board_editor, require_card_editor, require_board_viewer
 from .permissions import check_board_admin_permission,check_card_edit_permission, check_board_view_permission, IsBoardMember # Import hàm permission mới
@@ -43,11 +48,12 @@ class BoardListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, workspace_id):
-        boards = Board.objects.filter(
-            workspace_id=workspace_id, is_closed=False
-        ).filter(
-            Q(created_by=request.user) | Q(members=request.user)
-        ).distinct()
+        boards = (Board.objects
+                .filter(workspace_id=workspace_id, is_closed=False)
+                .filter(Q(created_by=request.user) | Q(members=request.user))
+                .distinct()
+                .select_related('workspace'))  # ✅ thêm
+
         serializer = BoardSerializer(boards, many=True, context={'request': request})
         return Response(serializer.data)
 
@@ -95,10 +101,12 @@ class BoardDetailView(APIView):
 class ClosedBoardsListView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):
-        user_boards = Board.objects.filter(
-            Q(created_by=request.user) | Q(members=request.user),
-            is_closed=True
-        ).distinct().prefetch_related('workspace')
+        # views.py
+        user_boards = (Board.objects
+            .filter(Q(created_by=request.user) | Q(members=request.user), is_closed=True)
+            .distinct()
+            .select_related('workspace'))  # ✅ thay vì prefetch_related
+
         serializer = BoardSerializer(user_boards, many=True, context={'request': request})
         return Response(serializer.data)
     
@@ -180,7 +188,12 @@ class InboxCardCreateView(APIView):
         for board in user_accessible_boards:
             if board.created_by: all_related_user_ids.add(board.created_by.id)
             all_related_user_ids.update(board.members.values_list('id', flat=True))
-        inbox_cards = Card.objects.filter(list__isnull=True, created_by_id__in=all_related_user_ids).order_by('-created_at')
+
+        inbox_cards = (Card.objects
+            .filter(list__isnull=True, created_by_id__in=all_related_user_ids)
+            .prefetch_related('members')        # ✅ thêm
+            .order_by('-created_at'))
+
         serializer = CardSerializer(inbox_cards, many=True)
         return Response(serializer.data)
     
@@ -194,36 +207,27 @@ class InboxCardCreateView(APIView):
 class CardBatchUpdateView(APIView):
     permission_classes = [IsAuthenticated]
 
-    @require_board_admin(lambda self, request: Board.objects.get(id=request.data[0]['board_id']))
     def patch(self, request):
         updates = request.data
-        if not isinstance(updates, list):
-            return Response({"error": "Request body must be a list of updates"}, status=status.HTTP_400_BAD_REQUEST)
+        if not isinstance(updates, list) or not updates:
+            return Response({"error": "Request body must be a non-empty list"}, status=400)
 
-        try:
-            board_id = None
-            for update in updates:
-                card_id = update.get("id")
-                card = Card.objects.get(id=card_id, created_by=request.user)
-                serializer = CardSerializer(card, data=update, partial=True)
-                if serializer.is_valid():
-                    serializer.save()
-                    if not board_id:
-                        board_id = card.list.board_id if card.list else card.created_by.board_set.first().id
-                else:
-                    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        first_card = get_object_or_404(Card, id=updates[0].get("id"))
+        if not first_card.list:
+            return Response({"error": "Inbox cards cannot be batch-updated here"}, status=400)
+        board = first_card.list.board
+        check_board_admin_permission(board, request.user)  # ✅ kiểm tra admin/owner
 
-            # Gửi thông báo WebSocket
-            #channel_layer = get_channel_layer()
-            #async_to_sync(channel_layer.group_send)(
-            #    f'board_{board_id}',
-            #    {'type': 'card_update'}
-            #)
-            return Response({"message": "Cards updated successfully"}, status=status.HTTP_200_OK)
-        except Card.DoesNotExist:
-            return Response({"error": "One or more cards not found"}, status=status.HTTP_404_NOT_FOUND)
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        with transaction.atomic():
+            for upd in updates:
+                card = get_object_or_404(Card, id=upd.get("id"))
+                if not card.list or card.list.board_id != board.id:
+                    return Response({"error": "All cards must belong to the same board"}, status=400)
+                ser = CardSerializer(card, data=upd, partial=True)
+                ser.is_valid(raise_exception=True)
+                ser.save()
+
+        return Response({"message": "Cards updated successfully"}, status=200)
         
 # ===================================================================
 # View cho Members, Labels, và Share Link 
@@ -287,17 +291,20 @@ class BoardMembersView(APIView):
         except BoardMembership.DoesNotExist:
             return Response({'error': 'Membership not found'}, status=404)
         
-class BoardLabelsView(APIView):
+
+class BoardLabelListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
     @require_board_viewer(lambda self, request, board_id: Board.objects.get(id=board_id))
     def get(self, request, board_id):
+        """Lấy danh sách tất cả labels của một board."""
         labels = Label.objects.filter(board_id=board_id)
         serializer = LabelSerializer(labels, many=True)
         return Response(serializer.data)
 
-class LabelCreateView(APIView):
-    permission_classes = [IsAuthenticated]
     @require_board_admin(lambda self, request, board_id: Board.objects.get(id=board_id))
     def post(self, request, board_id):
+        """Tạo một label mới cho board."""
         try:
             board = Board.objects.get(id=board_id)
         except Board.DoesNotExist:
@@ -308,6 +315,7 @@ class LabelCreateView(APIView):
             serializer.save(board=board)
             return Response(serializer.data, status=201)
         return Response(serializer.errors, status=400)
+    
 class LabelDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -334,85 +342,6 @@ class LabelDetailView(APIView):
             return Response({"error": "Label not found"}, status=404)
 
 
-    permission_classes = [IsAuthenticated]
-
-    @require_board_viewer
-    def get(self, request, board_id):
-        board = Board.objects.get(id=board_id)
-        memberships = BoardMembership.objects.filter(board=board).select_related('user')
-        serializer = BoardMembershipSerializer(memberships, many=True)
-        return Response(serializer.data)
-    
-    # Mời thành viên mới cần quyền Admin
-    @require_board_admin
-    def post(self, request, board_id):
-        board = Board.objects.get(id=board_id)
-        user_id_to_invite = request.data.get('user_id')
-        role = request.data.get('role', 'viewer') # Lấy role từ frontend, mặc định là viewer
-
-        if not user_id_to_invite:
-            return Response({'error': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
-
-        if role not in ['admin', 'editor', 'viewer']:
-            return Response({'error': 'Invalid role'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            user_to_invite = User.objects.get(id=user_id_to_invite)
-        except User.DoesNotExist:
-            return Response({'error': 'User to invite not found'}, status=status.HTTP_404_NOT_FOUND)
-
-        if BoardMembership.objects.filter(board=board, user=user_to_invite).exists() or board.created_by == user_to_invite:
-            return Response({'message': 'User is already a member.'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        membership = BoardMembership.objects.create(board=board, user=user_to_invite, role=role)
-        serializer = BoardMembershipSerializer(membership)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-    # Thay đổi vai trò cần quyền Admin
-    @require_board_admin
-    def patch(self, request, board_id):
-        board = Board.objects.get(id=board_id)
-        user_id_to_update = request.data.get('user_id')
-        new_role = request.data.get('role')
-
-        if not user_id_to_update or not new_role:
-            return Response({'error': 'user_id and role are required'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        if new_role not in ['admin', 'editor', 'viewer']:
-            return Response({'error': 'Invalid role'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            membership = BoardMembership.objects.get(board_id=board_id, user_id=user_id_to_update)
-            # Người tạo (owner) không thể bị thay đổi vai trò
-            if membership.user == board.created_by:
-                return Response({'error': 'Cannot change the role of the board owner.'}, status=status.HTTP_400_BAD_REQUEST)
-
-            membership.role = new_role
-            membership.save()
-            serializer = BoardMembershipSerializer(membership)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        except BoardMembership.DoesNotExist:
-            return Response({'error': 'Membership not found'}, status=status.HTTP_404_NOT_FOUND)
-        
-    # Xóa thành viên cần quyền Admin
-    @require_board_admin
-    def delete(self, request, board_id):
-        board = Board.objects.get(id=board_id)
-        user_id_to_remove = request.data.get('user_id')
-        
-        if not user_id_to_remove:
-            return Response({'error': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            membership = BoardMembership.objects.get(board_id=board_id, user_id=user_id_to_remove)
-            
-            if membership.user == board.created_by:
-                return Response({'error': 'Cannot remove the board creator.'}, status=status.HTTP_400_BAD_REQUEST)
-            
-            membership.delete()
-            return Response(status=status.HTTP_204_NO_CONTENT)
-        except BoardMembership.DoesNotExist:
-            return Response({'error': 'Membership not found'}, status=status.HTTP_404_NOT_FOUND)
 class BoardShareLinkView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -430,9 +359,10 @@ class BoardShareLinkView(APIView):
         serializer = BoardInviteLinkSerializer(invite)
         return Response({
             "has_active": True,
-            "invite_link": serializer.data.get("url"),      # hoặc field token/url tuỳ model
-            "expires_at": serializer.data.get("expires_at")
+            "token": serializer.data["token"],
+            "expires_at": serializer.data.get("expires_at"),
         })
+
         
 
     @require_board_admin(lambda self, request, board_id: Board.objects.get(id=board_id))
@@ -450,101 +380,47 @@ class BoardShareLinkView(APIView):
     def delete(self, request, board_id):
         BoardInviteLink.objects.filter(board_id=board_id, is_active=True).update(is_active=False)
         return Response(status=status.HTTP_204_NO_CONTENT)
+    
+
 class BoardJoinByLinkView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, token):
-        try:
-            invite = BoardInviteLink.objects.get(token=token, is_active=True)
-        except BoardInviteLink.DoesNotExist:
-            return Response({'detail': 'Invalid or expired link'}, status=404)
+        # Lấy link mời đang active
+        invite = get_object_or_404(BoardInviteLink, token=token, is_active=True)
+
+        # Hết hạn?
+        if invite.is_expired():
+            return Response({'detail': 'Invite link has expired'}, status=status.HTTP_410_GONE)
 
         board = invite.board
         user = request.user
 
-        # Nếu đã là thành viên thì không cần thêm nữa
+        # Đã là thành viên?
         if BoardMembership.objects.filter(board=board, user=user).exists():
-            return Response({'detail': 'Already a member'}, status=400)
+            return Response({'detail': 'Already a member'}, status=status.HTTP_200_OK)
 
-        # map role của link thành role trong BoardMembership
-        membership_role = 'editor' if invite.role == 'member' else 'viewer'
+        # Map role của link → role trong BoardMembership
+        # member -> editor, admin -> admin, observer -> viewer
+        role_map = {
+            'member':   'editor',
+            'admin':    'admin',
+            'observer': 'viewer',
+        }
+        membership_role = role_map.get(invite.role, 'viewer')
+
         BoardMembership.objects.create(board=board, user=user, role=membership_role)
-        return Response({'detail': 'Joined board successfully'})
 
-class CardMembersView(APIView):
-    permission_classes = [IsAuthenticated]
+        # (Tuỳ chọn) chỉ dùng link một lần:
+        # invite.is_active = False
+        # invite.save(update_fields=['is_active'])
 
-    def get(self, request, card_id):
-        card = Card.objects.select_related('list__board').get(id=card_id)
-        # Quyền xem: giống CardCommentsView
-        if card.list:
-            check_board_view_permission(card.list.board, request.user)
-        else:
-            # Inbox: cho tác giả hoặc người có board chung với tác giả (giữ nguyên triết lý hiện có)
-            if card.created_by != request.user:
-                has_common = Board.objects.filter(Q(created_by=request.user) | Q(members=request.user)) \
-                    .filter(Q(created_by=card.created_by) | Q(members=card.created_by)).exists()
-                if not has_common:
-                    return Response({'detail': 'Forbidden'}, status=403)
+        return Response(
+            {'detail': 'Joined board successfully', 'role': membership_role},
+            status=status.HTTP_201_CREATED
+        )
 
-        members_qs = card.members.all().order_by('first_name', 'username')
-        return Response(UserShortSerializer(members_qs, many=True).data)
-
-    
-    def patch(self, request, card_id):
-        """Gán lại toàn bộ members của card qua danh sách member_ids"""
-        card = Card.objects.select_related('list__board').get(id=card_id)
-        # Quyền sửa card
-        check_card_edit_permission(card, request.user)
-
-        # Không cho assign nếu là inbox-card (không thuộc board)
-        if not card.list:
-            return Response({'detail': 'Cannot assign members to inbox cards'}, status=400)
-
-        board = card.list.board
-        member_ids = request.data.get('member_ids', [])
-        # Chỉ cho phép những user thuộc BoardMembership của board
-        valid_ids = set(BoardMembership.objects.filter(board=board).values_list('user_id', flat=True))
-        invalid = [uid for uid in member_ids if uid not in valid_ids]
-        if invalid:
-            return Response({'detail': f'Users {invalid} are not board members'}, status=400)
-
-        card.members.set(member_ids)
-        members_qs = card.members.all().order_by('first_name', 'username')
-        return Response(UserShortSerializer(members_qs, many=True).data)
-    
-class CardMemberAddView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, card_id):
-        card = Card.objects.select_related('list__board').get(id=card_id)
-        check_card_edit_permission(card, request.user)
-        if not card.list:
-            return Response({'detail': 'Cannot assign members to inbox cards'}, status=400)
-
-        uid = request.data.get('user_id')
-        if uid is None:
-            return Response({'detail': 'user_id is required'}, status=400)
-
-        board = card.list.board
-        if not BoardMembership.objects.filter(board=board, user_id=uid).exists():
-            return Response({'detail': 'User is not a board member'}, status=400)
-
-        card.members.add(uid)
-
-class CardMemberRemoveView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, card_id):
-        card = Card.objects.select_related('list__board').get(id=card_id)
-        check_card_edit_permission(card, request.user)
-        uid = request.data.get('user_id')
-        if uid is None:
-            return Response({'detail': 'user_id is required'}, status=400)
-
-        card.members.remove(uid)
-        return Response(status=204)
-            
+       
 class CardCommentsView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -602,3 +478,177 @@ class CommentDetailView(APIView):
             check_card_edit_permission(cmt.card, request.user)
         cmt.delete()
         return Response(status=204)
+    
+
+class CardMembershipListCreateView(APIView):
+    """
+    Xử lý việc lấy danh sách và thêm thành viên vào một card.
+    URL: /api/cards/<card_id>/memberships/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, card_id):
+        """Lấy danh sách tất cả thành viên của card."""
+        card = Card.objects.get(id=card_id)
+        # Bất kỳ ai có quyền xem board đều có thể xem thành viên của card
+        if card.list:
+            check_board_view_permission(card.list.board, request.user)
+        # (Bạn có thể thêm logic cho inbox card ở đây nếu cần)
+
+        memberships = CardMembership.objects.filter(card=card).select_related('user', 'assigned_by')
+        serializer = CardMembershipSerializer(memberships, many=True)
+        return Response(serializer.data)
+
+    def post(self, request, card_id):
+        """Thêm một thành viên mới vào card với vai trò cụ thể."""
+        card = Card.objects.get(id=card_id)
+        # Cần quyền editor để thêm thành viên
+        check_card_edit_permission(card, request.user)
+
+        user_id_to_add = request.data.get('user_id')
+        role = request.data.get('role', 'assignee')
+
+        if not user_id_to_add:
+            return Response({'detail': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate user is board member
+        if not card.list:
+            return Response({'detail': 'Cannot assign members to inbox cards'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        board = card.list.board
+        try:
+            user_to_add = User.objects.get(id=user_id_to_add)
+            if not BoardMembership.objects.filter(board=board, user=user_to_add).exists():
+                return Response({'detail': 'User is not a board member'}, status=status.HTTP_400_BAD_REQUEST)
+        except User.DoesNotExist:
+            return Response({'detail': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Tạo hoặc kích hoạt lại membership
+        membership, created = CardMembership.objects.update_or_create(
+            card=card,
+            user=user_to_add,
+            defaults={
+                'assigned_by': request.user,
+                'role': role,
+                'is_active': True
+            }
+        )
+        
+        # Log activity chỉ khi thực sự tạo mới hoặc gán lại vai trò
+        if created:
+            description = f'assigned {user_to_add.username} as {role}'
+        else:
+            description = f'updated {user_to_add.username}\'s role to {role}'
+
+        CardActivity.objects.create(
+            card=card,
+            user=request.user,
+            activity_type='member_added',
+            description=description,
+            target_user=user_to_add
+        )
+        
+        serializer = CardMembershipSerializer(membership)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class CardMembershipDetailView(APIView):
+    """
+    Xử lý việc cập nhật và xóa một thành viên cụ thể khỏi card.
+    URL: /api/cards/<card_id>/memberships/<user_id>/
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def patch(self, request, card_id, user_id):
+        """Cập nhật vai trò của một thành viên trên card."""
+        card = Card.objects.get(id=card_id)
+        # Cần quyền editor để thay đổi vai trò
+        check_card_edit_permission(card, request.user)
+
+        new_role = request.data.get('role')
+        if not new_role:
+            return Response({'detail': 'role is required for update'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            membership = CardMembership.objects.get(card_id=card_id, user_id=user_id)
+            old_role = membership.role
+            membership.role = new_role
+            membership.save()
+
+            # Log activity
+            CardActivity.objects.create(
+                card=card,
+                user=request.user,
+                activity_type='card_updated',
+                description=f'changed role for {membership.user.username} from {old_role} to {new_role}',
+                target_user=membership.user
+            )
+            
+            return Response(CardMembershipSerializer(membership).data)
+        except CardMembership.DoesNotExist:
+            return Response({'detail': 'Membership not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    def delete(self, request, card_id, user_id):
+        """Xóa một thành viên khỏi card."""
+        card = Card.objects.get(id=card_id)
+        # Cần quyền editor để xóa thành viên
+        check_card_edit_permission(card, request.user)
+        
+        try:
+            membership = CardMembership.objects.get(card=card, user_id=user_id)
+            target_user = membership.user
+            membership.delete()
+            
+            # Log activity
+            CardActivity.objects.create(
+                card=card,
+                user=request.user,
+                activity_type='member_removed',
+                description=f'removed {target_user.username} from the card',
+                target_user=target_user
+            )
+            
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except CardMembership.DoesNotExist:
+            return Response({'detail': 'Membership not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+class CardWatchersView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request, card_id):
+        """Get card watchers"""
+        card = Card.objects.get(id=card_id)
+        if card.list:
+            check_board_view_permission(card.list.board, request.user)
+        
+        watchers = card.watchers.all()
+        return Response(UserShortSerializer(watchers, many=True).data)
+    
+    def post(self, request, card_id):
+        """Add/remove watcher"""
+        card = Card.objects.get(id=card_id)
+        if card.list:
+            check_board_view_permission(card.list.board, request.user)
+        
+        action = request.data.get('action')  # 'add' or 'remove'
+        
+        if action == 'add':
+            card.watchers.add(request.user)
+            message = 'Added to watchers'
+        else:
+            card.watchers.remove(request.user)
+            message = 'Removed from watchers'
+            
+        return Response({'message': message})
+
+class CardActivityView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request, card_id):
+        """Get card activity history"""
+        card = Card.objects.get(id=card_id)
+        if card.list:
+            check_board_view_permission(card.list.board, request.user)
+        
+        activities = card.activities.all()[:50]  # Latest 50 activities
+        return Response(CardActivitySerializer(activities, many=True).data)

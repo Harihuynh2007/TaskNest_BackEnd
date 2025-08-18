@@ -4,6 +4,7 @@ from django.contrib.auth import get_user_model
 from django.conf import settings
 import uuid
 from datetime import datetime, timedelta
+from django.utils import timezone
 
 User = get_user_model()
 
@@ -53,8 +54,72 @@ class Card(models.Model):
     created_by = models.ForeignKey(User, on_delete=models.CASCADE, null=False)
     position = models.IntegerField(default=0)
     labels = models.ManyToManyField("Label", blank=True, related_name='cards')
-    members = models.ManyToManyField('auth.User', related_name='card_memberships', blank=True)
+    members = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        through='CardMembership',
+        through_fields=('card', 'user'),
+        related_name='card_memberships',
+        blank=True,
+    )
     
+    # Watchers - những người theo dõi card nhưng không được assign
+    watchers = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        related_name='watched_cards',
+        blank=True,
+    )
+    position = models.IntegerField(default=0, db_index=True)  # ✅ index
+class CardMembership(models.Model):
+    """Intermediate model để lưu thêm thông tin về card membership"""
+    card = models.ForeignKey(Card, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    assigned_by = models.ForeignKey(
+        User, 
+        on_delete=models.SET_NULL, 
+        null=True,
+        related_name='card_assignments_made'
+    )
+    assigned_at = models.DateTimeField(auto_now_add=True)
+    role = models.CharField(
+        max_length=20,
+        choices=[
+            ('assignee', 'Assignee'),
+            ('reviewer', 'Reviewer'),
+            ('observer', 'Observer')
+        ],
+        default='assignee'
+    )
+    is_active = models.BooleanField(default=True)
+    
+    class Meta:
+        unique_together = ('card', 'user')
+
+# Activity tracking
+class CardActivity(models.Model):
+    ACTIVITY_TYPES = [
+        ('member_added', 'Member Added'),
+        ('member_removed', 'Member Removed'),
+        ('card_moved', 'Card Moved'),
+        ('card_updated', 'Card Updated'),
+        ('comment_added', 'Comment Added'),
+        ('due_date_changed', 'Due Date Changed'),
+    ]
+    
+    card = models.ForeignKey(Card, on_delete=models.CASCADE, related_name='activities')
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    activity_type = models.CharField(max_length=20, choices=ACTIVITY_TYPES)
+    description = models.TextField()
+    target_user = models.ForeignKey(
+        User, 
+        on_delete=models.CASCADE, 
+        null=True, 
+        blank=True,
+        related_name='card_activities_received'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-created_at']
 
 class Label(models.Model):
     name = models.CharField(max_length=100)
@@ -101,7 +166,7 @@ class BoardInviteLink(models.Model):
     def is_expired(self):
         if not self.expires_at:
             return False
-        return datetime.now() > self.expires_at 
+        return timezone.now() > self.expires_at
     
 
 class Comment(models.Model):

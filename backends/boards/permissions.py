@@ -73,8 +73,14 @@ def check_board_admin_permission(board, user):
         return
     raise PermissionDenied("You must be an admin or the board creator to perform this action.")
 
-# boards/permissions.py
+
 class IsBoardMember(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
-        board = getattr(obj, 'board', None) or obj.list.board
-        return board.members.filter(id=request.user.id).exists()
+        board = getattr(obj, 'board', None)
+        if not board and getattr(obj, 'list', None):
+            board = obj.list.board
+        if not board:
+            return False  # hoặc cho phép theo rule inbox riêng của bạn
+        if getattr(board, 'created_by_id', None) == request.user.id:
+            return True
+        return BoardMembership.objects.filter(board=board, user_id=request.user.id).exists()
