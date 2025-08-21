@@ -2,7 +2,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from rest_framework import status
+from rest_framework import generics,status
 from django.contrib.auth import get_user_model
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
@@ -11,13 +11,13 @@ from django.db import transaction
 from rest_framework import permissions
 
 
-from .models import Board, Workspace, List, Card, Label, BoardMembership, BoardInviteLink,Comment
+from .models import Board, Workspace, List, Card, Label, BoardMembership, BoardInviteLink,Comment,Checklist, ChecklistItem
 from .serializers import (
     BoardSerializer, WorkspaceSerializer, ListSerializer, CardSerializer, 
     LabelSerializer,
     UserShortSerializer, BoardMembershipSerializer, BoardInviteLinkSerializer,
     CommentSerializer,CardActivitySerializer,CardActivity,
-    CardMembership,CardMembershipSerializer
+    CardMembership,CardMembershipSerializer,ChecklistSerializer, ChecklistItemSerializer
 )
 from .decorators import require_board_admin, require_board_editor, require_card_editor, require_board_viewer
 from .permissions import check_board_admin_permission,check_card_edit_permission, check_board_view_permission, IsBoardMember # Import hàm permission mới
@@ -652,3 +652,106 @@ class CardActivityView(APIView):
         
         activities = card.activities.all()[:50]  # Latest 50 activities
         return Response(CardActivitySerializer(activities, many=True).data)
+    
+
+# -------------------
+# Checklist CRUD
+# -------------------
+class CardChecklistListView(generics.ListCreateAPIView):
+    """
+    GET: lấy toàn bộ checklist trong card
+    POST: tạo checklist mới trong card
+    """
+    serializer_class = ChecklistSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        card_id = self.kwargs['card_id']
+        return Checklist.objects.filter(card_id=card_id)
+
+    def perform_create(self, serializer):
+        card_id = self.kwargs['card_id']
+        card = get_object_or_404(Card, pk=card_id)
+        serializer.save(card=card, created_by=self.request.user)
+
+
+class ChecklistDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET: lấy chi tiết checklist
+    PATCH/PUT: update checklist
+    DELETE: xoá checklist
+    """
+    queryset = Checklist.objects.all()
+    serializer_class = ChecklistSerializer
+    permission_classes = [IsAuthenticated]
+
+
+# -------------------
+# Checklist Item CRUD
+# -------------------
+class ChecklistItemListView(generics.ListCreateAPIView):
+    """
+    GET: lấy toàn bộ item trong 1 checklist
+    POST: tạo item mới
+    """
+    serializer_class = ChecklistItemSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        checklist_id = self.kwargs['checklist_id']
+        return ChecklistItem.objects.filter(checklist_id=checklist_id)
+
+    def perform_create(self, serializer):
+        checklist_id = self.kwargs['checklist_id']
+        checklist = get_object_or_404(Checklist, pk=checklist_id)
+        serializer.save(checklist=checklist)
+
+
+class ChecklistItemDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET: chi tiết 1 item
+    PATCH/PUT: update item (text, completed, due_date, assigned_to,…)
+    DELETE: xoá item
+    """
+    queryset = ChecklistItem.objects.all()
+    serializer_class = ChecklistItemSerializer
+    permission_classes = [IsAuthenticated]
+
+
+# -------------------
+# Special actions
+# -------------------
+from rest_framework.views import APIView
+
+class ReorderItemsView(APIView):
+    """
+    PATCH: nhận danh sách item_id theo thứ tự mới → update position
+    """
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk):
+        checklist = get_object_or_404(Checklist, pk=pk)
+        item_ids = request.data.get("item_ids", [])
+        for index, item_id in enumerate(item_ids):
+            ChecklistItem.objects.filter(pk=item_id, checklist=checklist).update(position=index)
+        return Response({"detail": "Items reordered"}, status=status.HTTP_200_OK)
+
+
+class ConvertItemToCardView(APIView):
+    """
+    POST: chuyển 1 checklist item thành 1 Card
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        item = get_object_or_404(ChecklistItem, pk=pk)
+        # Tạo Card mới trong cùng Board/List với card gốc
+        parent_card = item.checklist.card
+        new_card = Card.objects.create(
+            name=item.text,
+            list=parent_card.list,   # giữ nguyên list
+            created_by=request.user
+        )
+        # Option: xoá item hoặc giữ lại
+        item.delete()
+        return Response({"detail": "Item converted to card", "card_id": new_card.id}, status=status.HTTP_201_CREATED)    

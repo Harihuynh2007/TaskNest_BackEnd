@@ -1,4 +1,5 @@
 from django.urls import path
+from . import views
 from .views import (
     WorkspaceListCreateView,
     BoardListCreateView,
@@ -21,6 +22,8 @@ from .views import (
     CardMembershipDetailView,
     CardWatchersView,
     CardActivityView,
+    CardChecklistListView,
+
 )
 
 urlpatterns = [
@@ -74,4 +77,20 @@ urlpatterns = [
     
     # Card activity
     path('cards/<int:card_id>/activities/', CardActivityView.as_view()),
+
+
+    
+
+    # Checklist CRUD
+    path('cards/<int:card_id>/checklists/', views.CardChecklistListView.as_view()),
+    path('checklists/<int:pk>/', views.ChecklistDetailView.as_view()),
+    
+    # Checklist Item CRUD  
+    path('checklists/<int:checklist_id>/items/', views.ChecklistItemListView.as_view()),
+    path('checklist-items/<int:pk>/', views.ChecklistItemDetailView.as_view()),
+    
+    # Special actions
+    path('checklists/<int:pk>/reorder-items/', views.ReorderItemsView.as_view()),
+    path('checklist-items/<int:pk>/convert-to-card/', views.ConvertItemToCardView.as_view()),
+
 ]

@@ -52,7 +52,6 @@ class Card(models.Model):
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='doing')
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(User, on_delete=models.CASCADE, null=False)
-    position = models.IntegerField(default=0)
     labels = models.ManyToManyField("Label", blank=True, related_name='cards')
     members = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
@@ -178,3 +177,38 @@ class Comment(models.Model):
 
     class Meta:
         ordering = ['-created_at']    
+
+# Add to your models.py
+class Checklist(models.Model):
+    card = models.ForeignKey('Card', on_delete=models.CASCADE, related_name='checklists')
+    title = models.CharField(max_length=255, default='Checklist')
+    position = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+
+    class Meta:
+        ordering = ['position', 'created_at']
+
+    @property
+    def completion_percentage(self):
+        total_items = self.items.count()
+        if total_items == 0:
+            return 0
+        completed_items = self.items.filter(completed=True).count()
+        return round((completed_items / total_items) * 100)
+
+class ChecklistItem(models.Model):
+    checklist = models.ForeignKey(Checklist, on_delete=models.CASCADE, related_name='items')
+    text = models.TextField()
+    completed = models.BooleanField(default=False)
+    position = models.IntegerField(default=0)
+    due_date = models.DateTimeField(null=True, blank=True)
+    assigned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    completed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='completed_checklist_items')
+
+    class Meta:
+        ordering = ['position', 'created_at']        

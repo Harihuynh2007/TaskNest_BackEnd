@@ -1,6 +1,6 @@
 # backends/boards/serializers.py
 from rest_framework import serializers
-from .models import Board, Workspace, List, Card, Label, BoardMembership,BoardInviteLink,Comment,CardActivity,CardMembership
+from .models import Board, Workspace, List, Card, Label, BoardMembership,BoardInviteLink,Comment,CardActivity,CardMembership, Checklist, ChecklistItem
 from django.contrib.auth import get_user_model
 import hashlib
 
@@ -181,3 +181,42 @@ class EnhancedCardSerializer(serializers.ModelSerializer):
             'created_at', 'created_by', 'labels', 'members_roles', 
             'watchers', 'activities'
         ]
+
+
+class ChecklistItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChecklistItem
+        fields = [
+            'id',
+            'checklist',
+            'text',
+            'completed',
+            'position',
+            'due_date',
+            'assigned_to',
+            'created_at',
+            'updated_at',
+            'completed_at',
+            'completed_by',
+        ]
+        read_only_fields = ['id','checklist', 'created_at', 'updated_at', 'completed_at', 'completed_by']
+
+
+class ChecklistSerializer(serializers.ModelSerializer):
+    items = ChecklistItemSerializer(many=True, read_only=True)
+    completion_percentage = serializers.ReadOnlyField()
+
+    class Meta:
+        model = Checklist
+        fields = [
+            'id',
+            'card',
+            'title',
+            'position',
+            'created_at',
+            'updated_at',
+            'created_by',
+            'items',
+            'completion_percentage',
+        ]
+        read_only_fields = ['id','card','created_at','updated_at','created_by','completion_percentage']
