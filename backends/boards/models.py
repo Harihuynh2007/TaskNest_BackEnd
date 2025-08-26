@@ -212,3 +212,62 @@ class ChecklistItem(models.Model):
 
     class Meta:
         ordering = ['position', 'created_at']        
+
+
+# Thêm vào models.py
+
+class Attachment(models.Model):
+    ATTACHMENT_TYPES = [
+        ('file', 'File Upload'),
+        ('link', 'External Link'),
+    ]
+    
+    card = models.ForeignKey(Card, on_delete=models.CASCADE, related_name='attachments')
+    name = models.CharField(max_length=255)  # Tên hiển thị
+    attachment_type = models.CharField(max_length=10, choices=ATTACHMENT_TYPES, default='file')
+    
+    # Cho file upload
+    file = models.FileField(upload_to='attachments/%Y/%m/', null=True, blank=True)
+    file_size = models.BigIntegerField(null=True, blank=True)  # Size in bytes
+    mime_type = models.CharField(max_length=100, null=True, blank=True)
+    
+    # Cho external link
+    url = models.URLField(max_length=1000, null=True, blank=True)
+    
+    # Metadata
+    uploaded_by = models.ForeignKey(
+        User, 
+        on_delete=models.CASCADE,
+        related_name='attachments_uploaded'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    # Cho cover image
+    is_cover = models.BooleanField(default=False)
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.name} - {self.card.name}"
+    
+    @property
+    def file_size_human(self):
+        """Trả về kích thước file dễ đọc"""
+        size = self.file_size
+
+        if not size:
+            return None
+        
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size < 1024.0:
+                return f"{size:.1f} {unit}"
+            size /= 1024.0
+        return f"{size:.1f} TB"
+    
+    @property
+    def is_image(self):
+        """Kiểm tra có phải file ảnh không"""
+        if self.mime_type:
+            return self.mime_type.startswith('image/')
+        return False        

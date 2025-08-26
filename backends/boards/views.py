@@ -3,21 +3,29 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import generics,status
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from rest_framework.response import Response
+
 from django.contrib.auth import get_user_model
 from django.db.models import Q
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, redirect
 from django.db import transaction
+from django.http import FileResponse
+from django.utils.encoding import smart_str
+
+from urllib.parse import urlparse
 
 from rest_framework import permissions
 
 
-from .models import Board, Workspace, List, Card, Label, BoardMembership, BoardInviteLink,Comment,Checklist, ChecklistItem
+from .models import Board, Workspace, List, Card, Label, BoardMembership, BoardInviteLink,Comment,Checklist, ChecklistItem,Attachment
 from .serializers import (
     BoardSerializer, WorkspaceSerializer, ListSerializer, CardSerializer, 
     LabelSerializer,
     UserShortSerializer, BoardMembershipSerializer, BoardInviteLinkSerializer,
     CommentSerializer,CardActivitySerializer,CardActivity,
-    CardMembership,CardMembershipSerializer,ChecklistSerializer, ChecklistItemSerializer
+    CardMembership,CardMembershipSerializer,ChecklistSerializer, ChecklistItemSerializer,
+    AttachmentSerializer
 )
 from .decorators import require_board_admin, require_board_editor, require_card_editor, require_board_viewer
 from .permissions import check_board_admin_permission,check_card_edit_permission, check_board_view_permission, IsBoardMember # Import hàm permission mới
@@ -755,3 +763,246 @@ class ConvertItemToCardView(APIView):
         # Option: xoá item hoặc giữ lại
         item.delete()
         return Response({"detail": "Item converted to card", "card_id": new_card.id}, status=status.HTTP_201_CREATED)    
+    
+
+# ====== Helpers ======
+def _to_bool(val):
+    if isinstance(val, bool):
+        return val
+    if val is None:
+        return False
+    return str(val).strip().lower() in {"1", "true", "yes", "on"}
+
+def _is_http_url(url: str) -> bool:
+    try:
+        p = urlparse(url or "")
+        return p.scheme in ("http", "https") and bool(p.netloc)
+    except Exception:
+        return False    
+    
+ALLOWED_MIME_PREFIXES = (
+    "image/", "video/", "audio/", "application/pdf", "text/"
+)    
+
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10MB
+
+class CardAttachmentsView(APIView):
+    """Quản lý attachments của card"""
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def _ensure_can_view_card(self, card, user):
+        # Card thuộc board
+        if card.list:
+            check_board_view_permission(card.list.board, user)
+            return
+        
+        if card.created_by == user:
+            return
+        
+        has_common = Board.objects.filter(
+            Q(created_by=user) | Q(members=user)
+        ).filter(
+            Q(created_by=card.created_by) | Q(members=card.created_by)
+        ).exists()
+        if not has_common:
+            # raise PermissionDenied cũng được; ở đây trả Response thống nhất ở caller
+            raise PermissionError("Forbidden")
+        
+    def get(self, request, card_id):
+        """Lấy danh sách attachments của card (kèm phân trang nhẹ)"""
+        card = get_object_or_404(Card.objects.select_related("list__board", "created_by"), id=card_id)
+
+        try:
+            self._ensure_can_view_card(card, request.user)
+        except PermissionError:
+            return Response({'detail': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+        qs = card.attachments.select_related("uploaded_by").all()
+
+        # Optional: phân trang đơn giản qua ?limit= & ?offset=
+        try:
+            limit = int(request.query_params.get("limit", 50))
+            offset = int(request.query_params.get("offset", 0))
+        except ValueError:
+            limit, offset = 50, 0
+
+        total = qs.count()
+        items = qs[offset:offset + limit]
+
+        serializer = AttachmentSerializer(items, many=True, context={'request': request})
+        return Response({
+            "count": total,
+            "limit": limit,
+            "offset": offset,
+            "results": serializer.data
+        })    
+    
+    def post(self, request, card_id):
+        """Tạo attachment mới"""
+        card = get_object_or_404(Card.objects.select_related("list__board"), id=card_id)
+        check_card_edit_permission(card, request.user)
+
+        attachment_type = request.data.get('attachment_type', 'file').strip().lower()
+
+        if attachment_type == 'file':
+            file_obj = request.FILES.get('file')
+            if not file_obj:
+                return Response({'detail': 'File is required for file upload'},
+                                status=status.HTTP_400_BAD_REQUEST)
+            
+            # Size limit
+            if getattr(file_obj, "size", 0) > MAX_UPLOAD_BYTES:
+                return Response({'detail': f'File size must be less than {MAX_UPLOAD_BYTES // (1024*1024)}MB'},
+                                status=status.HTTP_400_BAD_REQUEST)
+            
+            # MIME basic allow (optional)
+            content_type = getattr(file_obj, "content_type", "") or ""
+            if not any(content_type.startswith(pfx) for pfx in ALLOWED_MIME_PREFIXES):
+                # Có thể nới lỏng/điều chỉnh theo nhu cầu
+                return Response({'detail': f'File type "{content_type}" not allowed.'},
+                                status=status.HTTP_400_BAD_REQUEST)
+            
+            data = {
+                'name': request.data.get('name') or getattr(file_obj, 'name', 'Attachment'),
+                'attachment_type': 'file',
+                'file': file_obj
+            }
+
+        elif attachment_type == 'link':
+            url = request.data.get('url')
+            if not url or not _is_http_url(url):
+                return Response({'detail' : 'A valid http/https URL is required for link attachment'},
+                                status = status.HTTP_400_BAD_REQUEST)
+
+            data = {
+                'name': request.data.get('name') or url,
+                'attachment_type': 'link',
+                'url': url
+            }  
+
+        else :
+            return Response({'detail': 'Invalid attachment type'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = AttachmentSerializer(data=data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        attachment = serializer.save(card=card, uploaded_by=request.user)
+
+        # Log activity
+        CardActivity.objects.create(
+            card=card,
+            user=request.user,
+            activity_type='card_updated',
+            description=f'added attachment "{attachment.name}"'
+        )
+
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+
+class AttachmentDetailView(APIView):
+    """Quản lý attachment cụ thể"""
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get(self, request, attachment_id):
+        """
+        Download file attachment:
+        - Nếu type = file: stream FileResponse (storage‑agnostic)
+        - Nếu type = link: redirect 302 tới URL
+        """
+        attachment = get_object_or_404(
+            Attachment.objects.select_related("card__list__board"),
+            id=attachment_id
+        )
+
+        # Quyền xem
+        card = attachment.card
+        if card.list:
+            check_board_view_permission(card.list.board, request.user)
+        else:
+            if card.created_by != request.user:
+                return Response({'detail': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+        if attachment.attachment_type == 'file' and attachment.file:
+            try:
+                file_handle = attachment.file.storage.open(attachment.file.name, 'rb')
+            except FileNotFoundError:
+                return Response({'detail': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
+            
+            filename = smart_str(attachment.name or attachment.file.name)
+            content_type = attachment.mime_type or 'application/octet-stream'
+            resp = FileResponse(file_handle, as_attachment=True, filename=filename, content_type=content_type)
+            return resp
+        
+        elif attachment.attachment_type == 'link':
+            if not _is_http_url(attachment.url):
+                return Response({'detail': 'Invalid URL'}, status=status.HTTP_400_BAD_REQUEST)
+            return redirect(attachment.url)
+        
+        return Response({'detail': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    def patch(self, request, attachment_id):
+        """Cập nhật attachment (tên, cover, etc.)"""
+        attachment = get_object_or_404(
+            Attachment.objects.select_related("card__list__board"),
+            id=attachment_id
+        )
+        check_card_edit_permission(attachment.card, request.user)
+
+        is_cover_in = request.data.get('is_cover', None)
+        will_set_cover = _to_bool(is_cover_in)
+
+        with transaction.atomic():
+            # Nếu set cover = True: unset các cover khác cùng card
+            if is_cover_in is not None and will_set_cover:
+                Attachment.objects.filter(card=attachment.card, is_cover=True).exclude(id=attachment.id).update(is_cover=False)
+
+            serializer = AttachmentSerializer(attachment, data=request.data, partial=True, context={'request': request})
+            serializer.is_valid(raise_exception=True)
+            obj = serializer.save()
+
+    # Log activity (tuỳ chọn: chỉ khi đổi cover hoặc đổi tên)
+        if 'name' in request.data:
+            CardActivity.objects.create(
+                card=attachment.card, user=request.user,
+                activity_type='card_updated',
+                description=f'renamed attachment to "{obj.name}"'
+            )
+        if is_cover_in is not None:
+            CardActivity.objects.create(
+                card=attachment.card, user=request.user,
+                activity_type='card_updated',
+                description='set card cover from attachment' if will_set_cover else 'unset card cover'
+            )
+
+        return Response(serializer.data)
+
+    def delete(self, request, attachment_id):
+        """Xóa attachment (và file ở storage nếu có)"""
+        attachment = get_object_or_404(
+            Attachment.objects.select_related("card__list__board"),
+            id=attachment_id
+        )
+        check_card_edit_permission(attachment.card, request.user)
+
+        # Log trước khi xóa
+        CardActivity.objects.create(
+            card=attachment.card,
+            user=request.user,
+            activity_type='card_updated',
+            description=f'removed attachment "{attachment.name}"'
+        )
+
+        # Xóa file ở storage (S3/FS) nếu có
+        if attachment.file:
+            try:
+                attachment.file.storage.delete(attachment.file.name)
+            except Exception:
+                # Không chặn xoá DB nếu lỗi xóa file vật lý
+                pass
+
+        attachment.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+  

@@ -23,6 +23,8 @@ from .views import (
     CardWatchersView,
     CardActivityView,
     CardChecklistListView,
+    CardAttachmentsView, 
+    AttachmentDetailView
 
 )
 
@@ -93,4 +95,6 @@ urlpatterns = [
     path('checklists/<int:pk>/reorder-items/', views.ReorderItemsView.as_view()),
     path('checklist-items/<int:pk>/convert-to-card/', views.ConvertItemToCardView.as_view()),
 
+    path('cards/<int:card_id>/attachments/', CardAttachmentsView.as_view(), name='card-attachments'),
+    path('attachments/<int:attachment_id>/', AttachmentDetailView.as_view(), name='attachment-detail'),
 ]

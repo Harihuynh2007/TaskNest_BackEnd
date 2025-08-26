@@ -1,6 +1,6 @@
 # backends/boards/serializers.py
 from rest_framework import serializers
-from .models import Board, Workspace, List, Card, Label, BoardMembership,BoardInviteLink,Comment,CardActivity,CardMembership, Checklist, ChecklistItem
+from .models import Board, Workspace, List, Card, Label, BoardMembership,BoardInviteLink,Comment,CardActivity,CardMembership, Checklist, ChecklistItem, Attachment
 from django.contrib.auth import get_user_model
 import hashlib
 
@@ -220,3 +220,70 @@ class ChecklistSerializer(serializers.ModelSerializer):
             'completion_percentage',
         ]
         read_only_fields = ['id','card','created_at','updated_at','created_by','completion_percentage']
+
+
+
+class AttachmentSerializer(serializers.ModelSerializer):
+    uploaded_by = UserShortSerializer(read_only=True)
+    file_size_human = serializers.ReadOnlyField()
+    is_image = serializers.ReadOnlyField()
+    file_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Attachment
+        fields = [
+            'id', 'name', 'attachment_type', 'file', 'file_url', 'file_size',
+            'file_size_human', 'mime_type', 'url', 'uploaded_by',
+            'created_at', 'is_cover', 'is_image'
+        ]
+        read_only_fields = ['uploaded_by', 'created_at', 'file_size', 'mime_type']
+
+    def get_file_url(self, obj):
+        # Ưu tiên trả về URL truy cập trực tiếp:
+        # - file upload: storage url
+        # - link: chính là obj.url
+        request = self.context.get('request')
+        if obj.attachment_type == 'file' and obj.file:
+            return request.build_absolute_uri(obj.file.url) if request else obj.file.url
+        if obj.attachment_type == 'link' and obj.url:
+            return obj.url
+        return None
+    
+    def validate(self, attrs):
+        a_type = attrs.get('attachment_type') or getattr(self.instance, 'attachment_type', None)
+        file_obj = attrs.get('file')
+        link_url = attrs.get('url')
+
+        if a_type == 'file':
+            if not file_obj and not (self.instance and self.instance.file):
+                raise serializers.ValidationError("File attachment requires a file.")
+            if link_url:
+                raise serializers.ValidationError("File attachment should not include a URL.")
+        elif a_type == 'link':
+            if not link_url and not (self.instance and self.instance.url):
+                raise serializers.ValidationError("Link attachment requires a URL.")
+            if file_obj:
+                raise serializers.ValidationError("Link attachment should not include a file.")
+        else:
+            raise serializers.ValidationError("Invalid attachment_type. Use 'file' or 'link'.")
+
+        return attrs
+    
+    def create(self, validated_data):
+        # Auto-fill file_size & mime_type nếu là file
+        file_obj = validated_data.get('file')
+        if file_obj:
+            validated_data['file_size'] = getattr(file_obj, 'size', None)
+            validated_data['mime_type'] = getattr(file_obj, 'content_type', '') or ''
+            # Đặt name mặc định nếu thiếu
+            validated_data.setdefault('name', getattr(file_obj, 'name', 'Attachment'))
+        else:
+            # Link: đặt name mặc định nếu thiếu
+            if not validated_data.get('name'):
+                from urllib.parse import urlparse
+                parsed = urlparse(validated_data.get('url', ''))
+                # ví dụ: example.com/path → "example.com/path"
+                default_name = (parsed.netloc + parsed.path).strip('/') or 'Link'
+                validated_data['name'] = default_name
+
+        return super().create(validated_data)
