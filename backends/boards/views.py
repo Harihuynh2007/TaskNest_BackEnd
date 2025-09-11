@@ -176,12 +176,102 @@ class CardDetailView(APIView):
     @require_card_editor(lambda s, r, **k: Card.objects.get(id=k['card_id']))
     def patch(self, request, card_id):
         card = Card.objects.get(id=card_id)
+        old_data = {
+            'list': card.list,
+            'due_date': card.due_date,
+            'description': card.description,
+            'name': card.name,
+            'labels': set(card.labels.all())
+        }
+        
         serializer = CardSerializer(card, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         
-        serializer.save()
+        # Save changes
+        updated_card = serializer.save()
+        
+        # Log specific changes
+        self._log_card_changes(card, old_data, request.user, request.data)
+        
         return Response(serializer.data)
     
+    def _log_card_changes(self, card, old_data, user, new_data):
+        """Log specific changes made to card"""
+        
+        # Card moved between lists
+        if 'list' in new_data and old_data['list'] != card.list:
+            if old_data['list'] and card.list:
+                description = f'moved card from "{old_data["list"].name}" to "{card.list.name}"'
+            elif card.list:
+                description = f'moved card to "{card.list.name}"'
+            else:
+                description = f'moved card from "{old_data["list"].name}" to Inbox'
+                
+            CardActivity.objects.create(
+                card=card,
+                user=user,
+                activity_type='card_moved',
+                description=description
+            )
+
+        if 'due_date' in new_data and old_data['due_date'] != card.due_date:
+                if card.due_date:
+                    description = f'set due date to {card.due_date.strftime("%b %d at %I:%M %p")}'
+                else:
+                    description = 'removed due date'
+                    
+                CardActivity.objects.create(
+                    card=card,
+                    user=user,
+                    activity_type='due_date_changed',
+                    description=description
+                )
+
+        if 'description' in new_data and old_data['description'] != card.description:
+            if card.description and card.description.strip():
+                description = 'updated card description'
+            else:
+                description = 'removed card description'
+                
+            CardActivity.objects.create(
+                card=card,
+                user=user,
+                activity_type='card_updated',
+                description=description
+            )     
+
+        if 'name' in new_data and old_data['name'] != card.name:
+            CardActivity.objects.create(
+                card=card,
+                user=user,
+                activity_type='card_updated',
+                description=f'renamed card to "{card.name}"'
+            )    
+
+        # Labels changed (if labels are updated via card endpoint)
+        if 'labels' in new_data:
+            current_labels = set(card.labels.values_list("id", flat=True))
+            old_labels = {l.id for l in old_data['labels']}
+            added_labels = current_labels - old_data['labels']
+            removed_labels = old_data['labels'] - current_labels
+            
+            for label in added_labels:
+                CardActivity.objects.create(
+                    card=card,
+                    user=user,
+                    activity_type='card_updated',
+                    description=f'added label "{label.name}"'
+                )
+            
+            for label in removed_labels:
+                CardActivity.objects.create(
+                    card=card,
+                    user=user,
+                    activity_type='card_updated',
+                    description=f'removed label "{label.name}"'
+                )       
+                    
+
     @require_card_editor(lambda s, r, **k: Card.objects.get(id=k['card_id']))
     def delete(self, request, card_id):
         card = Card.objects.get(id=card_id)
@@ -660,7 +750,34 @@ class CardActivityView(APIView):
         
         activities = card.activities.all()[:50]  # Latest 50 activities
         return Response(CardActivitySerializer(activities, many=True).data)
+
+class ActivityLogger:
+    @staticmethod
+    def log_card_creation(card, user):
+        CardActivity.objects.create(
+            card=card,
+            user=user,
+            activity_type='card_updated',
+            description='created card'
+        )
     
+    @staticmethod
+    def log_card_archive(card, user):
+        CardActivity.objects.create(
+            card=card,
+            user=user,
+            activity_type='card_updated',
+            description='archived card'
+        )
+    
+    @staticmethod
+    def log_card_unarchive(card, user):
+        CardActivity.objects.create(
+            card=card,
+            user=user,
+            activity_type='card_updated',
+            description='restored card from archive'
+        )    
 
 # -------------------
 # Checklist CRUD
@@ -693,6 +810,26 @@ class ChecklistDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ChecklistSerializer
     permission_classes = [IsAuthenticated]
 
+    def perform_update(self, serializer):
+        checklist = serializer.save()
+        # Log checklist title change
+        if 'title' in self.request.data:
+            CardActivity.objects.create(
+                card=checklist.card,
+                user=self.request.user,
+                activity_type='card_updated',
+                description=f'renamed checklist to "{checklist.title}"'
+            )
+
+    def perform_destroy(self, instance):
+        CardActivity.objects.create(
+            card=instance.card,
+            user=self.request.user,
+            activity_type='card_updated',
+            description=f'deleted checklist "{instance.title}"'
+        )
+        super().perform_destroy(instance)        
+
 
 # -------------------
 # Checklist Item CRUD
@@ -702,6 +839,7 @@ class ChecklistItemListView(generics.ListCreateAPIView):
     GET: lấy toàn bộ item trong 1 checklist
     POST: tạo item mới
     """
+    
     serializer_class = ChecklistItemSerializer
     permission_classes = [IsAuthenticated]
 
@@ -725,6 +863,19 @@ class ChecklistItemDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ChecklistItemSerializer
     permission_classes = [IsAuthenticated]
 
+    def perform_update(self, serializer):
+        old_completed = serializer.instance.completed
+        item = serializer.save()
+        
+        # Log completion status change
+        if 'completed' in self.request.data and old_completed != item.completed:
+            action = 'completed' if item.completed else 'marked incomplete'
+            CardActivity.objects.create(
+                card=item.checklist.card,
+                user=self.request.user,
+                activity_type='card_updated',
+                description=f'{action} "{item.text}" on {item.checklist.title}'
+            )
 
 # -------------------
 # Special actions
